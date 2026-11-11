@@ -9,6 +9,7 @@ function editor() {
   let finish;
   const upload = new Promise(resolve => { finish = resolve; });
   const context = vm.createContext({
+    writingAutosave: () => ({schedule() {}}), writingInFlight: () => false, writingUnconfirmed: () => false,
     FormData, V: { researchSaving: false, researchDraft: null },
     S: { context: 'Original context', ledger: [{ id: 'L1', text: 'Original claim' }] },
     workspaceClient: { workspaceId: 'default' },

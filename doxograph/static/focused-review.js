@@ -99,7 +99,7 @@ window.FocusedReview = (() => {
           <h3 class="focus-paper-title">${esc(paper?.title || item.paper)}</h3>
           <p class="hint">${esc((paper?.authors || []).join(', '))} ${esc(paper?.year || '')}</p>
           ${content}
-          ${editing ? '<p class="hint">Unsaved edits are kept for this session when you move to another claim or exit.</p>' : `<div class="focus-actions">
+          ${editing ? '<p class="hint">Edits save automatically as you write.</p>' : `<div class="focus-actions">
             ${button('review', item.reviewed ? (at < items.length - 1 ? 'Reviewed — next claim' : 'Reviewed') : 'Mark reviewed' + (at < items.length - 1 ? ' & next' : ''), item.reviewed && at === items.length - 1, true)}
             ${button('edit', V.drafts[item.id] ? 'Resume edits' : 'Edit claim')}
             ${item.reviewed ? button('unreview', 'Mark unreviewed') : ''}
@@ -326,7 +326,9 @@ window.FocusedReview = (() => {
     else if (name === 'unreviewed') move(1, true);
     else if (name === 'edit') { editing = true; render(); body.querySelector('textarea[name="text"]').focus(); }
     else if (name === 'cancel') {
-      if (isSaving(current)) return;
+      parkDraft();
+      const id = current;
+      if (!await finishWriting('claim', id, () => current === id && dialog.open && editing)) return;
       retireManualQuitState('claim', current, manualQuitState('claim', current)); editing = false; render();
     }
     else if (name === 'review' && !editing) {
@@ -345,12 +347,18 @@ window.FocusedReview = (() => {
   dialog.addEventListener('click', event => {
     const target = event.target.closest('button');
     if (!target || target.disabled) return;
-    if (target.dataset.act === 'drop-link') target.closest('.linkrow').remove();
+    if (target.dataset.act === 'drop-link') { target.closest('.linkrow').remove(); parkDraft(); writingAutosave('claim', current).schedule(); }
     else action(target.dataset.focus || target.dataset.act || '');
   });
-  dialog.addEventListener('submit', event => {
+  dialog.addEventListener('submit', async event => {
     event.preventDefault();
-    if (editing && event.target.matches('form[data-form]')) write(readForm(event.target));
+    if (editing && event.target.matches('form[data-form]')) {
+      parkDraft();
+      const id = current, owner = V.drafts;
+      if (await finishWriting('claim', id, () => current === id && dialog.open && editing) && current === id && V.drafts === owner && dialog.open) {
+        delete V.drafts[id]; editing = false; render();
+      }
+    }
   });
   dialog.addEventListener('input', parkDraft);
   dialog.addEventListener('change', event => {
@@ -365,7 +373,7 @@ window.FocusedReview = (() => {
     if (command) { event.preventDefault(); action(command); }
   });
   window.addEventListener('beforeunload', event => {
-    if (dialog.open && editing) { parkDraft(); event.preventDefault(); event.returnValue = ''; }
+    if (dialog.open && editing) parkDraft();
   });
   return {connect(value) { client = value; }, captureDraft: parkDraft, open, sync };
 })();

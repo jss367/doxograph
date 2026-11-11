@@ -163,7 +163,9 @@ $('ask').addEventListener('cancel', (event) => {
 $('ask').addEventListener('close', () => {
   // close() queues this event. An answer can open the next question before
   // it arrives, so only cancel a question whose dialog is still closed.
-  if (!$('ask').open) settleAsk(null);
+  // An already settled close must not advance the generation again: a new
+  // async opener may be waiting for its revision read before showing a dialog.
+  if (!$('ask').open && askResolve) settleAsk(null);
 });
 
 const confirmDialog = (title, { note = '', ok = 'OK' } = {}) =>

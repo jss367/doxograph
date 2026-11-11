@@ -139,13 +139,14 @@ Open **Project overview** in the sidebar and upload a diagram (PNG, JPEG,
 WebP, or GIF). Choose **Detect sections with AI** to suggest clickable areas
 using your selected model connection. Only the diagram is sent; section notes
 are kept local. Detection requires AI analysis to be enabled and a model that
-supports images. Review the suggested labels and boundaries before saving.
+supports images. Review the suggested labels and boundaries after detection.
 
 Click a section to write Markdown notes, links, equations, and add pictures.
 Use **Draw a section** to drag out a missing area, or adjust its percentage
 coordinates in the editor. The section buttons below the diagram also work
-with the keyboard. **Save changes** saves the whole overview; concurrent edits
-in another window are rejected without overwriting your unsaved writing.
+with the keyboard. Changes save automatically after you pause typing;
+**Save now** retries immediately. Concurrent edits in another window are rejected
+without overwriting your unsaved writing.
 
 Each workspace can hold multiple diagrams. Overviews use research-note storage,
 so workspace backups and archives include their images and section notes.
@@ -488,9 +489,11 @@ reviewed. The PDF opens at the locally matched quote (or its closest passage),
 falling back to the recorded page when no match is available; page and zoom
 controls let you check the surrounding material. Papers without a PDF can
 still be reviewed. Use **Mark reviewed & next**, **Edit claim**, or the same
-`j`, `k`, `r`, `e`, and `n` shortcuts; `Escape` exits. Unsaved edits are kept
-for the current browser session when moving between claims or exiting review;
-**Cancel** discards the current edit. Quote matching and PDF viewing run locally
+`j`, `k`, `r`, `e`, and `n` shortcuts; `Escape` exits. Edits save automatically,
+including when moving between claims or exiting review. **Done** saves immediately
+and closes the editor. Failed saves keep your writing available to retry; Done
+offers **Discard changes** if a save still fails. Failed mark-note saves show
+**Discard note**, which asks before dropping the unsaved text. Quote matching and PDF viewing run locally
 and work with AI analysis disabled.
 
 The divider between the lists and the claims can be dragged, so a session spent
@@ -1080,10 +1083,21 @@ claims or tensions, **Rewrite**, or `--force` replaces it.
 
 In **Workspace → What I am studying**, paste an image into **Research context**
 or click **Add image**. The image appears in a Markdown preview below the editor;
-click **Save** to keep the context. PNG, JPEG, GIF, and WebP images up to 10 MB
+the context saves automatically. PNG, JPEG, GIF, and WebP images up to 10 MB
 are stored locally with the workspace and included in its archive. Delete the
 image's Markdown link to remove it from the context. Automated analysis receives
 the context text, not the image pixels.
+
+## Saving your writing
+
+Edits to claims (including focused review), syntheses, research context, paper
+notes, PDF mark notes, project diagrams, people, datasets, and benchmarks save
+automatically about 0.6 seconds after you stop typing. The editor shows
+**Waiting to save…**, **Saving…**, **Saved**, or **Couldn’t save**. You can keep
+typing while a save is running. **Done** saves immediately and closes an editor;
+a failed save keeps your writing available to retry. Switching workspaces and
+quitting the app attempt to finish pending saves before checking for unsaved work.
+Creating a new claim and submitting a prompt remain explicit actions.
 
 ## Notes of your own
 
@@ -1099,7 +1113,7 @@ is there the next time you open the paper.
 Write what the paper is for, what to read it for, what is wrong with it, what
 to do about it — whatever the extraction could not have told you. A claim's
 note is a field in its editor, under the links to your own claims: press `e`,
-write it, Save. It shows under the claim on its card, marked *my note*, so
+write it, and it saves automatically. It shows under the claim on its card, marked *my note*, so
 what you wrote is never mistaken for what the model read out.
 
 Both are searched along with everything else, so a word only you wrote finds

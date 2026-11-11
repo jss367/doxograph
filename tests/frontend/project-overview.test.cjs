@@ -14,7 +14,7 @@ function editor() {
       replaceChildren(...children) { this.children = children; },
       append(child) { this.children.push(child); },
       add(child) { this.append(child); },
-      setAttribute() {},
+      setAttribute() {}, addEventListener() {},
     };
   }
   const get = id => {
@@ -28,7 +28,7 @@ function editor() {
     ] },
   };
   const context = vm.createContext({
-    URL, URLSearchParams, structuredClone,
+    URL, URLSearchParams, structuredClone, setTimeout, clearTimeout,
     location: { search: '?workspace=default' },
     window: { addEventListener() {} },
     document: {
@@ -48,6 +48,7 @@ function editor() {
       return { ok: true, json: async () => structuredClone(body) };
     },
   });
+  vm.runInContext(readFileSync(resolve(__dirname, '../../doxograph/static/autosave.js'), 'utf8'), context);
   vm.runInContext(readFileSync(resolve(__dirname, '../../doxograph/static/project.js'), 'utf8'), context);
   return { get, writes };
 }
@@ -56,15 +57,14 @@ test('section bounds still update the saved project after repeated saves', async
   const { get, writes } = editor();
   await tick();
   get('regions').children[0].onclick();
-  await get('save').onclick();
   const left = get('bounds').children[0].children[0];
   left.value = '25';
   left.onchange();
   await get('save').onclick();
-  assert.equal(writes[1].project.sections[0].x, .25);
+  assert.equal(writes[0].project.sections[0].x, .25);
   left.value = '35';
   left.onchange();
   await get('save').onclick();
-  assert.equal(writes[2].project.sections[0].x, .35);
-  assert.equal(writes[2].revision, 3);
+  assert.equal(writes[1].project.sections[0].x, .35);
+  assert.equal(writes[1].revision, 2);
 });

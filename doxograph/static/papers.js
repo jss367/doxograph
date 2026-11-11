@@ -755,6 +755,7 @@ async function removePaper(paper) {
   // or a topic accepted, and the guard is no use to the DELETE if it goes up
   // only once that window has closed. It is dropped in the `finally` at the
   // end, so it covers the whole attempt and not just the request.
+  const writingOwner = V.drafts;
   removingPapers.add(paper);
   // Frozen claim ids, filled in once the flush has settled and the corpus is
   // known. Declared out here so the `finally` can hand them back on the way
@@ -858,6 +859,9 @@ async function removePaper(paper) {
     // able to work on them again.
     frozen.forEach((id) => markSaving(id, false));
     removingPapers.delete(paper);
+    // The debounce may have expired during the initial deletion flush, before
+    // any claim was frozen. Resume surviving drafts only in the same workspace.
+    if (V.drafts === writingOwner) S.claims.filter(row => row.paper === paper).forEach(row => resumeClaimWriting(row.id));
   }
 }
 

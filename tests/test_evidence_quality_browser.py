@@ -31,7 +31,7 @@ def test_manual_evidence_assessment(engine):
                 await page.locator('[name="limitations"]').fill('Same dataset as the earlier paper')
                 await page.locator('[name="evidence_origin"]').fill('Evaluation set A')
                 await page.locator('[name="evidence_relationship"]').select_option('shared_data')
-                await page.locator('form[data-form]').get_by_role('button', name='Save', exact=True).click()
+                await page.locator('form[data-form]').get_by_role('button', name='Done', exact=True).click()
                 await expect(page.locator('.evidence-quality').first).to_contain_text('Needs human review')
                 await expect(page.locator('.evidence-quality').first).to_contain_text('Uses shared data')
                 await expect(page.locator('#content')).to_contain_text('Same dataset as the earlier paper')

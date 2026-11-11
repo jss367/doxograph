@@ -8,9 +8,8 @@ from playwright.async_api import expect
 from browser_support import browser_session, run_browser
 from test_ask_browser import _server
 from test_core_workspace_boundary_browser import editor, seed
-from test_browser import _answer
 from doxograph import config
-from test_quit_manual_editors_browser import cancel, frozen_report, resume, save, stored
+from test_quit_manual_editors_browser import cancel, frozen_report, resume, stored
 from browser_support import inert_tools as inert_tools
 
 
@@ -31,7 +30,7 @@ def test_clean_editor_quit_compares_the_opened_baseline(engine, kind, state, par
                 original = await field.input_value()
                 if state == 'reverted':
                     await field.fill('An edit that was reverted')
-                    assert await page.evaluate('window.doxographSaveDrafts()') is False
+                    assert await page.evaluate('hasQuitWriting()') is True
                     await field.fill(original)
                 elif state == 'edited-matches-poll':
                     await field.fill('A genuinely edited value')
@@ -44,12 +43,12 @@ def test_clean_editor_quit_compares_the_opened_baseline(engine, kind, state, par
                 if parked:
                     await page.evaluate("openPageView('library')")
                 clean = state != 'edited-matches-poll'
-                assert await page.evaluate('window.doxographSaveDrafts()') is clean
+                assert await page.evaluate('window.doxographSaveDrafts()') is True
                 report = await frozen_report(page)
-                assert report['saved'] is clean
+                assert report['saved'] is True
                 assert await frozen_report(page) == report
                 await resume(page)  # Don't Quit keeps the opened/parked form state.
-                assert stored(url, kind, identity) == original
+                assert stored(url, kind, identity) == (original if clean else 'A genuinely edited value')
                 if not parked:
                     await expect(field).to_have_value('A genuinely edited value' if not clean else original)
                     await cancel(page, kind, identity)
@@ -59,64 +58,35 @@ def test_clean_editor_quit_compares_the_opened_baseline(engine, kind, state, par
 
 @pytest.mark.browser
 @pytest.mark.parametrize('engine', ['chromium', 'webkit'])
-@pytest.mark.parametrize('kind', ['claim', 'synthesis'])
+@pytest.mark.parametrize('kind', ['claim', 'synthesis', 'research'])
 @pytest.mark.parametrize('response', ['lost', 'definite-failure'])
-@pytest.mark.parametrize('decision', ['retry', 'discard'])
-def test_failed_manual_write_stays_unsaved_after_reverting_to_baseline(engine, kind, response, decision):
+def test_failed_write_stays_unsaved_after_reverting_to_baseline(engine, kind, response):
     _, claims, _ = seed()
 
     async def scenario():
         async with browser_session(engine) as browser:
             page = await browser.new_page(viewport={'width':1440, 'height':1000})
-            started, release = asyncio.Event(), asyncio.Event()
-
             async def uncertain(route):
-                if route.request.method != 'PATCH':
-                    await route.continue_()
-                    return
                 if response == 'lost':
                     committed = await route.fetch()
                     assert committed.status == 200
-                started.set()
-                await release.wait()
-                if response == 'lost':
                     await route.abort('failed')
                 else:
-                    await route.fulfill(status=503, json={'detail':'Synthetic refused manual save'})
-
+                    await route.fulfill(status=503, json={'detail':'Synthetic refused save'})
             with _server() as url:
                 await page.goto(url+'/#view=claims')
                 field, identity = await editor(page, kind, claims)
                 original = await field.input_value()
-                path = f'/api/papers/study/claims/{identity}' if kind == 'claim' else '/api/syntheses/recovery'
+                path = f'/api/papers/study/claims/{identity}' if kind == 'claim' else '/api/syntheses/recovery' if kind == 'synthesis' else '/api/context'
                 await page.route('**'+path, uncertain)
-                await field.fill('Transient submitted writing')
-                await save(page, kind, identity)
-                try:
-                    await asyncio.wait_for(started.wait(), 5)
-                    assert (await frozen_report(page))['saved'] is False
-                    # Direct Escape-style handlers cannot discard a pending write.
-                    await page.evaluate('kind => kind === "claim" ? cancelEdit() : cancelSynthEdit()', kind)
-                    assert await page.evaluate('window.doxographSaveDrafts()') is False
-                    release.set()
-                    await page.wait_for_function('!savingClaims.size && !V.synthSaving')
-                    await resume(page)
-                    await field.fill(original)
-                    report = await frozen_report(page)
-                    assert report['saved'] is False and report['snapshot']
-                    assert await frozen_report(page) == report
-                    assert stored(url, kind, identity) == ('Transient submitted writing' if response == 'lost' else original)
-                    await resume(page)
-                    await page.unroute('**'+path, uncertain)
-                    if decision == 'retry':
-                        await save(page, kind, identity)
-                        await page.wait_for_function('!savingClaims.size && !V.synthSaving')
-                        assert stored(url, kind, identity) == original
-                    else:
-                        await cancel(page, kind, identity)
-                    assert await page.evaluate('window.doxographSaveDrafts()') is True
-                finally:
-                    release.set()
+                await field.fill('Transient writing')
+                assert await page.evaluate('window.doxographSaveDrafts()') is False
+                await field.fill(original)
+                assert await page.evaluate('window.doxographSaveDrafts()') is False
+                await expect(field).to_have_value(original)
+                await page.unroute('**'+path, uncertain)
+                assert await page.evaluate('window.doxographSaveDrafts()') is True
+                assert stored(url, kind, identity) == original
     run_browser(asyncio.wait_for(scenario(), 20))
 
 
@@ -158,8 +128,6 @@ def test_manual_quit_baselines_belong_to_the_committed_workspace(engine, kind):
                 _, identity = await editor(page, kind, claims)
                 assert await page.evaluate('window.doxographSaveDrafts()') is True
                 await page.evaluate('id => { window.switching = switchWorkspace(id); }', other)
-                # Workspace navigation retains its existing explicit editor consent.
-                await _answer(page, 'Discard and switch')
                 await page.evaluate('window.switching')
                 assert await page.evaluate('[Object.keys(V.quitClaimBases).length,Object.keys(V.quitSynthBases).length,Object.keys(V.unconfirmedClaims).length,Object.keys(V.unconfirmedSyntheses).length]') == [0, 0, 0, 0]
                 path = f'/api/papers/study/claims/{identity}' if kind == 'claim' else '/api/syntheses/recovery'

@@ -126,7 +126,7 @@ def test_existing_claim_annotations_follow_the_pdf_and_saved_changes(engine):
                 note = page.get_by_role('button', name='Show note: A note attached to this passage.', exact=True)
                 assert await note.count() == 0
                 await page.locator('[data-highlight-note]').fill('A note attached to this passage.')
-                await page.get_by_role('button', name='Save note', exact=True).click()
+                await page.get_by_role('button', name='Done', exact=True).click()
                 await ready(page)
                 await note.wait_for()
                 await note.focus()
@@ -142,7 +142,7 @@ def test_existing_claim_annotations_follow_the_pdf_and_saved_changes(engine):
                 # Removing the note removes its badge while preserving its highlight.
                 await page.locator('#content').get_by_role('button', name='Edit note', exact=True).click()
                 await page.locator('[data-highlight-note]').fill('')
-                await page.get_by_role('button', name='Save note', exact=True).click()
+                await page.get_by_role('button', name='Done', exact=True).click()
                 await ready(page)
                 assert await note.count() == 0
                 assert await first_page.locator('.highlight-yellow').count() == 1

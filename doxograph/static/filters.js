@@ -60,8 +60,9 @@ function clearFilters(key) {
   $('only-unreviewed').checked = V.unreviewed;
   $('only-unverified').checked = V.unverified;
   if (key === 'all' || key === 'q') dropTextSearch();
-  if (V.view === 'research' && V.researchSaving) {
-    // The save owns the disabled form and inserts any failure beside it.
+  if (V.view === 'research' && (V.researchSaving || writingInFlight('research', ''))) {
+    // Uploads and Done's pending autosave both own this form. Replacing it
+    // would invalidate completion and discard confirmation for the save.
     // Update the filters and sidebar while keeping that form connected.
     render();
     syncHash();

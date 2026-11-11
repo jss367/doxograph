@@ -6,7 +6,7 @@
 //
 // context.md and ledger.yaml are the two inputs that most shape what
 // extraction returns, and both used to need a text editor outside the app.
-// One form edits both; Save writes both.
+// One form edits both; autosave writes the fields that changed.
 
 // A saved claim has a link other documents can keep. One not saved yet, or
 // under an id not saved yet, has none to give.
@@ -21,19 +21,19 @@ function ledgerRow(claim, i) {
   </div>`;
 }
 
-// The research form's edits live only in the DOM until Save, and every other
+// Capture the research form before the next autosave or any
 // redraw (a filter, a paper click, the topic list) rebuilds `#content`. Read
 // the form into `V.researchDraft` before any of that, and draw from the draft
 // when there is one, so navigating away and back finds the text as it was.
 function captureResearchDraft() {
   if ($('new-tag')) V.topicDraft = $('new-tag').value;
-  if (!$('research-form')) return;
+  if (!$('research-form') || ($('research-form').dataset?.workspace && $('research-form').dataset.workspace !== workspaceClient.workspaceId)) return;
   const current = readResearchForm();
   // A form nobody has typed into is not a draft. It is judged against what
   // it was drawn from, not against `S`: a poll can replace `S` while the form
   // is open, and an untouched form would then look edited, be kept, and
   // later write the old values over the change made elsewhere.
-  V.researchDraft = differs(current, V.researchBase || storedResearch()) ? current : null;
+  V.researchDraft = differs(current, V.researchBase || storedResearch()) || writingInFlight('research', '') || writingUnconfirmed('research', '') ? current : null;
 }
 
 function storedResearch() {
@@ -70,12 +70,12 @@ function renderResearch() {
     <em>why it is here</em> line. Your own claims are what a paper's claims are linked
     against: supports, contradicts, supplies a method for, refines.</p>`;
   if (V.error) html += `<p class="warn">${esc(V.error)}</p>`;
-  html += `<form class="edit research" id="research-form">
+  html += `<form class="edit research" id="research-form" data-workspace="${esc(workspaceClient.workspaceId)}">
     <div><label for="research-context">Research context</label>
       <textarea id="research-context" name="context" rows="8"
         placeholder="What the research is about, and what makes a paper relevant to it."
         aria-describedby="research-context-help">${esc(context)}</textarea>
-      <p class="hint" id="research-context-help">Paste images here or add an image. Markdown is supported. Click Save to keep your changes.
+      <p class="hint" id="research-context-help">Paste images here or add an image. Markdown is supported. Changes save automatically.
         Images are kept in this workspace; automated analysis reads the text only.</p>
       <button type="button" id="research-add-image">Add image</button>
       <input type="file" id="research-image-file" accept="image/png,image/jpeg,image/gif,image/webp" hidden>
@@ -85,8 +85,8 @@ function renderResearch() {
       <div class="links" id="ledger-rows">${ledger.map(ledgerRow).join('')}</div>
       <div class="row"><button type="button" data-act="add-ledger">Add a claim</button></div></div>
     <div class="row right">
-      <button type="button" data-act="cancel-research">Cancel</button>
-      <button type="submit" class="primary">Save</button>
+      ${writingStatus('research')}
+      <button type="submit" class="primary">Done</button>
     </div>
   </form>
   ${workspaceTopics()}
@@ -159,7 +159,7 @@ document.addEventListener('click', (event) => {
 });
 
 // Whether the research form on screen differs from what the server holds. The
-// form is the only place its edits live until Save, so leaving the workspace
+// form can hold text newer than its last save, so leaving the workspace
 // with it dirty is leaving a draft behind.
 function researchFormDirty() {
   if ($('research-form')) return differs(readResearchForm(), V.researchBase || storedResearch());
@@ -182,53 +182,15 @@ function setResearchSaving(form, busy) {
 }
 
 async function saveResearch() {
-  if (V.researchSaving) return;   // a save is in flight: one ledger/context pair at a time
-  const form = $('research-form');
-  const { context, claims } = readResearchForm();
-  V.error = null;
-  V.researchSaving = true;
-  setResearchSaving(form, true);
-  // Only what was edited is written, judged against what the form was drawn
-  // from: a field left alone must not carry the value the form opened with
-  // over a change made elsewhere while it was open.
-  const base = V.researchBase || storedResearch();
-  const ledgerChanged = JSON.stringify(claims) !== JSON.stringify(base.claims);
-  const contextChanged = context.trim() !== base.context.trim();
-  try {
-    // The ledger goes first: it is the one of the two the server can refuse
-    // (a missing or repeated id), so nothing is written unless both will be.
-    if (ledgerChanged) {
-      await api('/api/ledger', {
-        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ claims }),
-      });
-    }
-    if (contextChanged) {
-      await api('/api/context', {
-        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: context }),
-      });
-    }
-  } catch (error) {
-    // Show the error over the form as typed; redrawing from S would put the
-    // saved values back and lose the edit that just failed.
-    V.error = `Could not save: ${error.message}`;
-    const currentForm = $('research-form') || form;
-    let warn = currentForm.previousElementSibling;
-    if (!warn || !warn.classList.contains('warn')) {
-      currentForm.insertAdjacentHTML('beforebegin', '<p class="warn"></p>');
-      warn = currentForm.previousElementSibling;
-    }
-    warn.textContent = V.error;
-    return;
-  } finally {
-    V.researchSaving = false;
-    setResearchSaving(form, false);
-    if ($('research-form') !== form) setResearchSaving($('research-form'), false);
+  const form = $('research-form'), owner = V.drafts;
+  captureResearchDraft();
+  const result = await finishWriting('research', '', () => $('research-form') === form && !V.researchSaving);
+  if (result && V.drafts === owner && $('research-form') === form) {
+    // Navigation captures an open form; remove the explicitly discarded DOM
+    // first so it cannot recreate the draft we just retired.
+    if (result === 'discarded') form.remove();
+    showView('claims'); syncHash(true); renderContent();
   }
-  showView('claims');       // captures the form on the way out, so clear after
-  V.researchDraft = null;
-  V.researchBase = null;
-  syncHash(true);           // as with Cancel: leaving the form is a move
-  await refreshAll();
 }
 
 $('panes').addEventListener('submit', async (event) => {
@@ -290,7 +252,7 @@ async function addResearchImage(file) {
       current.value = draft.context;
       current.setSelectionRange(insertStart + insertion.length, insertStart + insertion.length);
       renderResearchPreview();
-      $('research-image-status').textContent = 'Image added. Click Save to keep your changes.';
+      $('research-image-status').textContent = 'Image added. Changes save automatically.';
     }
   } catch (error) {
     if (workspaceClient.workspaceId === workspace) {
@@ -302,6 +264,7 @@ async function addResearchImage(file) {
     V.researchSaving = false;
     setResearchSaving(form, false);
     setResearchSaving($('research-form'), false);
+    if (V.researchDraft) writingAutosave('research').schedule();
     if ($('research-context') === field && document.activeElement === document.body) field.focus();
   }
 }

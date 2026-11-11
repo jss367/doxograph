@@ -56,7 +56,41 @@ const ResearchTools = (() => {
   // A highlight note being written in the rail is a draft until Save note. It
   // counts as unsaved once it differs from the note on file, so leaving the
   // page asks first, as it does for a board or a connection being edited.
-  const highlightDrafting = () => Boolean(markEditor) && markEditor.text !== markEditor.saved;
+  const highlightDrafting = () => Boolean(markEditor) && (markEditor.text !== markEditor.saved || markSavers.get(markEditor)?.unconfirmed);
+  const markSavers = new WeakMap();
+  function markAutosave() {
+    const draft = markEditor;
+    if (!draft) return null;
+    if (markSavers.has(draft)) return markSavers.get(draft);
+    let sent = draft.saved;
+    const saver = createAutosave({
+      current: () => markEditor === draft && draft.workspace === client.workspaceId ? draft : null,
+      dirty: () => draft.text !== draft.saved,
+      async write() {
+        const note = draft.text, previous = sent;
+        sent = note;
+        const saved = await mutateNotebook(draft.workspace, n => {
+          const h = n.highlights.find(h => h.id === draft.id && h.paper === draft.paper);
+          if (!h) throw new Error('This mark was removed. Your writing is kept.');
+          if (h.note !== draft.saved && h.note !== previous) throw new Error('This note changed in another window. Your writing is kept.');
+          h.note = note;
+        }, {refresh:false});
+        draft.saved = note;
+        if (draft.workspace === client.workspaceId) client.state.notebook = saved;
+      },
+      changed() {
+        const label = document.querySelector('[data-mark-save-status]');
+        if (label && markEditor === draft) {
+          label.textContent = saver.describe(); label.className = saver.failure ? 'warn' : 'hint';
+          const discard = label.parentElement.querySelector('[data-tool="discard-highlight"]');
+          if (discard) discard.hidden = !saver.failure;
+        }
+      },
+    });
+    markSavers.set(draft, saver);
+    return saver;
+  }
+  async function flushMark() { return markAutosave() ? markAutosave().flush() : true; }
   const markEditorOn = paper => markEditor?.workspace === client.workspaceId && markEditor.paper === paper;
   const unsaved = () => dirty || editing() || connectionDraft || highlightDrafting();
   const refKey = r => JSON.stringify([r.paper, r.claim || r.id]);
@@ -143,39 +177,88 @@ const ResearchTools = (() => {
     el('research-tools').classList.toggle('is-busy', value);
     el('research-tools').setAttribute('aria-busy', String(value));
   }
-  // Saves the notebook. `board` or `notes` also saves those held edits, merged
-  // into the notebook as last read, so whatever changed there meanwhile stays.
-  async function save({board = null, notes = false} = {}) {
-    const merging = Boolean(board && edits.boards[board]) || (notes && Object.keys(edits.notes).length > 0);
-    let next = notebook;
-    if (merging) {
-      // The board or connection this edit started from has changed since, here
-      // or in another window: saving would overwrite that, or bring it back.
-      // Refuse, as the server does for a stale notebook; the edits stay on screen.
-      const changed = (board && edits.boards[board] && edits.boardBases[board] !== JSON.stringify(notebook.boards.find(b => b.id === board) ?? null))
-        || (notes && Object.keys(edits.notes).some(id => {
-          // Gone counts as changed even when the note it had was empty, which
-          // reads the same as a missing one.
-          const connection = notebook.connections.find(c => c.id === id);
-          return !connection || edits.noteBases[id] !== JSON.stringify(connection.note ?? null);
-        }));
-      if (changed) throw new Error('Research tools changed in another window. Reload the saved version before trying again.');
-      next = structuredClone(notebook);
-      if (board && edits.boards[board]) {
-        const i = next.boards.findIndex(b => b.id === board);
-        if (i < 0) next.boards.push(edits.boards[board]); else next.boards[i] = edits.boards[board];
-      }
-      if (notes) for (const [id, note] of Object.entries(edits.notes)) {
-        const connection = next.connections.find(c => c.id === id);
-        if (connection) connection.note = note;
-      }
-    } else dirty = true;
-    notebook = await request('', 'PUT', next);
-    dirty = false;
-    if (board) { delete edits.boards[board]; delete edits.boardBases[board]; }
-    if (notes) { edits.notes = {}; edits.noteBases = {}; edits.noteConnections = {}; }
+  // Tool actions own fields, not the whole notebook snapshot shown on screen.
+  // Re-read inside the shared mutation queue so hidden note/page autosaves
+  // cannot be overwritten by a later reading-queue or board action.
+  async function saveNotebookChange(change, acknowledge = () => {}) {
+    const ws = modalWorkspace || workspace, original = notebook;
+    const saved = await mutateNotebook(ws, change, {refresh:false});
+    if (client.workspaceId === ws && notebook === original) notebook = saved;
+    // A later refresh can fail without undoing the acknowledged write.
+    acknowledge();
     await refreshAll();
-    message('Saved.');
+    if (client.workspaceId === ws) message('Saved.');
+    return saved;
+  }
+  function requireUnchangedField(latest, previous, desired) {
+    if (JSON.stringify(latest) !== JSON.stringify(previous) && JSON.stringify(latest) !== JSON.stringify(desired)) {
+      throw new Error('Research tools changed in another window. Reload the saved version before trying again.');
+    }
+  }
+  async function save({board = null, notes = false} = {}) {
+    const owner = edits;
+    const boardDraft = board && owner.boards[board] ? structuredClone(owner.boards[board]) : null;
+    const noteDrafts = notes ? structuredClone(owner.notes) : {};
+    await saveNotebookChange(next => {
+      if (boardDraft) {
+        const i = next.boards.findIndex(b => b.id === board);
+        if (owner.boardBases[board] !== JSON.stringify(next.boards[i] ?? null)) {
+          throw new Error('Research tools changed in another window. Reload the saved version before trying again.');
+        }
+        if (i < 0) next.boards.push(boardDraft); else next.boards[i] = boardDraft;
+      }
+      for (const [id, note] of Object.entries(noteDrafts)) {
+        const connection = next.connections.find(c => c.id === id);
+        if (!connection || owner.noteBases[id] !== JSON.stringify(connection.note ?? null)) {
+          throw new Error('Research tools changed in another window. Reload the saved version before trying again.');
+        }
+        connection.note = note;
+      }
+      if (!boardDraft && !Object.keys(noteDrafts).length) return false;
+    }, () => {
+      if (edits !== owner) return;
+      if (boardDraft) {
+        if (JSON.stringify(owner.boards[board]) === JSON.stringify(boardDraft)) {
+          delete owner.boards[board]; delete owner.boardBases[board];
+        } else if (owner.boards[board]) owner.boardBases[board] = JSON.stringify(boardDraft);
+      }
+      for (const [id, note] of Object.entries(noteDrafts)) {
+        if (owner.notes[id] === note) dropNote(id);
+        else if (Object.hasOwn(owner.notes, id)) owner.noteBases[id] = JSON.stringify(note);
+      }
+    });
+  }
+  async function setReadingStatus(paper, status) {
+    const previous = notebook.reading.find(r => r.paper === paper)?.status;
+    await saveNotebookChange(next => {
+      const row = next.reading.find(r => r.paper === paper);
+      if (!row) throw new Error('This paper was removed from the reading queue.');
+      requireUnchangedField(row.status, previous, status);
+      row.status = status;
+    });
+  }
+  async function setHighlightQuestion(id, question) {
+    const previous = (shown && notebook ? notebook : client.state.notebook)?.highlights.find(h => h.id === id)?.question;
+    const change = n => {
+      const h = n.highlights.find(h => h.id === id);
+      if (!h) throw new Error('This mark was removed in another window.');
+      requireUnchangedField(Boolean(h.question), Boolean(previous), question);
+      h.question = question;
+    };
+    if (shown && notebook) await saveNotebookChange(change);
+    else await mutateNotebook(client.workspaceId, change);
+  }
+  async function changeReadingOrder(name, paper) {
+    const previous = notebook.reading.map(r => r.paper);
+    await saveNotebookChange(next => {
+      const items = next.reading, i = items.findIndex(r => r.paper === paper);
+      if (i < 0) return false;
+      if (name === 'reading-remove') { items.splice(i, 1); return; }
+      requireUnchangedField(items.map(r => r.paper), previous, previous);
+      const j = i + (name === 'reading-up' ? -1 : 1);
+      if (j < 0 || j >= items.length) return false;
+      [items[i], items[j]] = [items[j], items[i]];
+    });
   }
   // Brings the tab the URL names on screen. Unsaved board edits are held
   // beside the notebook and stay through a change of tab; a connection being
@@ -303,8 +386,9 @@ const ResearchTools = (() => {
   }
   async function queue(keys) {
     if (!keys.length) throw new Error('Select at least one paper or claim first.');
-    for (const paper of keys) if (!notebook.reading.some(r => r.paper === paper)) notebook.reading.push({paper,status:'queued',page:1,bookmarks:[]});
-    await save();
+    await saveNotebookChange(next => {
+      for (const paper of keys) if (!next.reading.some(r => r.paper === paper)) next.reading.push({paper,status:'queued',page:1,bookmarks:[]});
+    });
   }
   async function download(format, board = null) {
     if (board && edits.boards[board]) await save({board});
@@ -1020,12 +1104,26 @@ const ResearchTools = (() => {
   // Read, change, write: the saved notebook rather than a copy held since the
   // modal last opened, so a highlight made here cannot overwrite a board saved
   // there. `fn` returns false to leave the notebook as it is.
+  const notebookMutations = new Map();
   async function mutateNotebook(ws, fn, {refresh = true, history = true} = {}) {
-    const latest = await request('', 'GET', undefined, ws);
-    if (fn(latest) === false) return latest;
-    const saved = await request('', 'PUT', latest, ws, history);
-    if (refresh) await refreshAll();
-    return saved;
+    // Autosave, reader actions and page progress all update the same revision.
+    // Read only when this workspace's previous transaction has finished.
+    const transaction = (notebookMutations.get(ws) || Promise.resolve()).then(async () => {
+      const latest = await request('', 'GET', undefined, ws);
+      if (fn(latest) === false) return {saved:latest, changed:false};
+      return {saved:await request('', 'PUT', latest, ws, history), changed:true};
+    });
+    // A refused write must not poison subsequent actions or retries.
+    const settled = transaction.then(() => {}, () => {});
+    notebookMutations.set(ws, settled);
+    try {
+      const {saved, changed} = await transaction;
+      // Refresh can itself schedule reader work: it must not own the queue.
+      if (refresh && changed) await refreshAll();
+      return saved;
+    } finally {
+      if (notebookMutations.get(ws) === settled) notebookMutations.delete(ws);
+    }
   }
   // The rail's list of the paper's highlights, in page order, drawn by app.js
   // under the paper's note. The note being edited is held here, not in the DOM:
@@ -1045,7 +1143,7 @@ const ResearchTools = (() => {
           <span class="swatches" role="group" aria-label="Color of this mark">${COLORS.map(c => button('recolor-highlight', '', `class="swatch highlight-${c}" data-color="${c}" aria-label="Color ${c}" aria-pressed="${c === h.color}" title="Color this mark ${c}"`)).join('')}</span>
           <label title="A question to come back to; it is listed under Marks and questions until answered"><input type="checkbox" data-highlight-question="${html(h.id)}" ${h.question ? 'checked' : ''}> Open question</label>
           <span class="cact">
-          ${editing ? button('save-highlight', 'Save note') + button('cancel-highlight', 'Cancel') : button('edit-highlight', h.note.trim() ? 'Edit note' : 'Add note')}
+          ${editing ? button('save-highlight', 'Done') + button('discard-highlight', 'Discard note', markAutosave().failure ? '' : 'hidden') + `<span role="status" data-mark-save-status>${html(markAutosave().describe())}</span>` : button('edit-highlight', h.note.trim() ? 'Edit note' : 'Add note')}
           ${figure ? '' : button('capture-highlight', 'Capture as claim')}${button('remove-highlight', 'Remove')}</span></div>
       </article>`;
     }).join('') : empty}</section>`;
@@ -1100,7 +1198,7 @@ const ResearchTools = (() => {
     scrollToSelected({reveal: Boolean(claim)});
   }
   const READER_TOOLS = new Set(['previous-page', 'next-page', 'go-page', 'bookmark', 'reader', 'highlight-selection', 'recolor-highlight',
-    'highlight-page', 'show-highlight-note', 'edit-highlight', 'save-highlight', 'cancel-highlight', 'capture-highlight', 'remove-highlight', 'figure-mode', 'export-annotated', 'copy-removed-note', 'discard-removed-note', 'retry-reader']);
+    'highlight-page', 'show-highlight-note', 'edit-highlight', 'save-highlight', 'cancel-highlight', 'discard-highlight', 'capture-highlight', 'remove-highlight', 'figure-mode', 'export-annotated', 'copy-removed-note', 'discard-removed-note', 'retry-reader']);
   async function readerAction(name, target) {
     const data = target.dataset;
     if (name === 'retry-reader') {
@@ -1217,11 +1315,21 @@ const ResearchTools = (() => {
     if (name === 'edit-highlight') {
       // One note is written at a time; the one half-written is not dropped for
       // another without asking.
-      if (markEditor?.id !== id && highlightDrafting()
-        && !await confirmDialog('Discard the note you are writing on another highlight?', {ok:'Discard note'})) return;
+      if (markEditor?.id !== id && !await flushMark()) return;
       openMarkNote(highlight); return;
     }
-    if (name === 'cancel-highlight') { markEditor = null; redrawContent(); return; }
+    if (name === 'discard-highlight') {
+      const draft = markEditor, saver = markAutosave();
+      if (!draft || draft.id !== id || !saver?.failure) return;
+      await saver.settle();
+      const generation = saver.generation;
+      if (await confirmDialog('Discard unsaved changes to this note?', {ok:'Discard note'})
+        && markEditor === draft && draft.workspace === client.workspaceId && saver.generation === generation) {
+        markEditor = null; redrawContent();
+      } else saver.resume();
+      return;
+    }
+    if (name === 'cancel-highlight') { if (await flushMark()) { markEditor = null; redrawContent(); } return; }
     if (name === 'recolor-highlight') {
       const color = COLORS.includes(data.color) ? data.color : 'yellow';
       storeColor(color);
@@ -1242,22 +1350,7 @@ const ResearchTools = (() => {
     if (name === 'save-highlight') {
       const draft = markEditor;
       if (!draft || draft.id !== id || draft.workspace !== client.workspaceId) return;
-      const note = draft.text;
-      target.disabled = true;
-      try {
-        await mutateNotebook(draft.workspace, n => {
-          const h = n.highlights.find(h => h.id === id && h.paper === draft.paper);
-          if (!h) throw new Error('This highlight was removed in another window.');
-          if (h.note !== draft.saved) throw new Error('This note changed in another window. Your draft is kept; copy it before reloading the saved note.');
-          h.note = note;
-        }, {refresh:false});
-        draft.saved = note;
-        // Only this exact editor may be completed by its save. New typing
-        // remains a draft against the version that actually reached disk.
-        if (markEditor === draft && draft.text === note) markEditor = null;
-        else if (markEditor === draft) toast('Saved the note as it was when you clicked Save. What you typed since is still in the editor.');
-        await refreshAll();
-      } finally { target.disabled = false; }
+      if (await flushMark() && markEditor === draft) { markEditor = null; await refreshAll(); redrawContent(); }
       return;
     }
     if (name === 'remove-highlight') {
@@ -1307,11 +1400,8 @@ const ResearchTools = (() => {
       return;
     }
     if (name.startsWith('reading-')) {
-      const key = target.closest('[data-reading]').dataset.reading, items = notebook.reading;
-      const i = items.findIndex(r=>r.paper === key);
-      if (name === 'reading-remove') items.splice(i,1);
-      else { const j = i + (name === 'reading-up' ? -1 : 1); if (j >= 0 && j < items.length) [items[i],items[j]] = [items[j],items[i]]; }
-      await save(); renderReading(); return;
+      await changeReadingOrder(name, target.closest('[data-reading]').dataset.reading);
+      renderReading(); return;
     }
     if (name === 'history') { if (!await discardDrafts()) return; await showHistory(data.paper, data.claim || null, move, opened); return; }
     if (name === 'restore') {
@@ -1419,19 +1509,15 @@ const ResearchTools = (() => {
     if (target.matches('[data-select-paper]')) {
       target.checked ? papers.add(target.dataset.selectPaper) : papers.delete(target.dataset.selectPaper); remember(); sync(); return;
     }
-    if (target.matches('[data-reading-status]')) run(async () => {
-      notebook.reading.find(r=>r.paper === target.dataset.readingStatus).status = target.value;
-      await save();
-    });
+    if (target.matches('[data-reading-status]')) {
+      const paper = target.dataset.readingStatus, status = target.value;
+      run(() => setReadingStatus(paper, status));
+    }
     if (target.id === 'reader-zoom') run(() => setZoom(target.value));
-    if (target.matches('[data-highlight-question]')) run(async () => {
+    if (target.matches('[data-highlight-question]')) {
       const id = target.dataset.highlightQuestion, question = target.checked;
-      if (shown && notebook) {
-        notebook.highlights.find(h => h.id === id).question = question;
-        await save(); return;
-      }
-      await mutateNotebook(client.workspaceId, n => { const h = n.highlights.find(h => h.id === id); if (!h) throw new Error('This mark was removed in another window.'); h.question = question; });
-    });
+      run(() => setHighlightQuestion(id, question));
+    }
   });
   document.addEventListener('keydown', event => {
     if (event.key === 'Enter' && event.target.id === 'reader-page') { event.preventDefault(); run(() => readerAction('go-page', event.target)); }
@@ -1440,11 +1526,12 @@ const ResearchTools = (() => {
     const target = event.target;
     if (target.dataset.highlightNote) {
       if (markEditor?.id === target.dataset.highlightNote && markEditor.workspace === client.workspaceId) markEditor.text = target.value;
+      markAutosave()?.schedule();
       return;
     }
     if (!el('research-tools')?.contains(target)) return;
   });
-  window.addEventListener('beforeunload', event => { if (unsaved()) { event.preventDefault(); event.returnValue = ''; } });
+  window.addEventListener('beforeunload', event => { if (unsaved()) { void flushMark(); event.preventDefault(); event.returnValue = ''; } });
   // Everything a workspace switch would discard, to tell whether it changed
   // after the reader agreed to discard it.
   let discarding = null;
@@ -1452,6 +1539,7 @@ const ResearchTools = (() => {
     && [...document.querySelectorAll('#research-body [id^="connection-"]')].map(field => field.value),
     highlightDrafting() && [markEditor.id, markEditor.paper, markEditor.text]]);
   async function beforeWorkspaceSwitch() {
+    await flushMark();
     // A reader action waiting on the notebook would finish in the workspace
     // it started in and open its paper over the one switched to.
     if (busy) {
@@ -1491,7 +1579,7 @@ const ResearchTools = (() => {
     redrawContent();
   }
   return {selection: () => ({papers: selectedPapers(), focus: refs().map(r => ({paper: r.paper, claim: r.claim}))}),
-    historyChanged,
+    historyChanged, flush: flushMark,
     connect(value, {open: opening, selected}) { client = value; navigate = opening; select = selected; }, show, hide,
     resetWorkspace() {
       hide();

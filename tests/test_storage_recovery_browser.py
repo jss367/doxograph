@@ -59,15 +59,14 @@ def test_an_editor_keeps_its_draft_when_a_topic_was_renamed(engine):
                 await page.goto(f"{url}/#view=claims")
                 await page.locator('[data-act="edit"][data-claim="paper-c1"]').click()
                 form = page.locator('form[data-form="paper-c1"]')
-                await form.locator('[name="text"]').fill("My unsaved wording")
                 store.rename_tag("old", "new")
-                await form.get_by_role("button", name="Save", exact=True).click()
-                await expect(page.locator('#content > .warn')).to_contain_text("Update the topic list")
+                await form.locator('[name="text"]').fill("My unsaved wording")
+                await expect(form.locator('[data-writing-status="claim"]')).to_contain_text("Update the topic list")
                 await expect(form.locator('[name="text"]')).to_have_value("My unsaved wording")
                 await expect(form.locator('[name="tags"]')).to_have_value("old")
                 assert store.load_paper("paper")["claims"][0]["tags"] == ["new"]
                 await form.locator('[name="tags"]').fill("new")
-                await form.get_by_role("button", name="Save", exact=True).click()
+                await form.get_by_role("button", name="Done", exact=True).click()
                 await expect(form).to_have_count(0)
                 assert store.load_paper("paper")["claims"][0]["text"] == "My unsaved wording"
 

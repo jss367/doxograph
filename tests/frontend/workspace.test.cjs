@@ -135,6 +135,8 @@ test('an older answer cannot overwrite a newer refresh or its ETag', async () =>
   assert.equal(discarded.applied, false);
   assert.equal(discarded.workspaceChanged, false);
   assert.deepEqual(client.state.papers, ['new']);
+  assert.equal(client.pullSequence, 2);
+  assert.equal(client.appliedPullSequence, 2);
   await client.pull();
   assert.equal(sentTags.at(-1), 'new-tag');
 });
@@ -170,7 +172,10 @@ test('an older success cannot clear a newer failure or commit its ETag', async (
   old.resolve(json({ papers: ['old'] }, 'old-tag'));
   assert.equal((await first).applied, false);
   assert.deepEqual(client.state.papers, []);
+  assert.equal(client.pullSequence, 2);
+  assert.equal(client.appliedPullSequence, 0);
   await client.pull();
+  assert.equal(client.appliedPullSequence, 3);
   assert.deepEqual(sentTags, [null, null, null]);
   assert.deepEqual(client.state.papers, ['recovered']);
 });

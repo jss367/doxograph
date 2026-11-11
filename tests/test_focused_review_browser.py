@@ -1,5 +1,6 @@
 """Review real claims beside local PDFs, including drafts and failed saves."""
 import asyncio
+import re
 from pathlib import Path
 
 import httpx
@@ -9,7 +10,7 @@ from playwright.async_api import expect
 from browser_support import browser_session, run_browser
 from doxograph import config, store
 from pdfs import minimal_pdf
-from test_browser import _answer, _server, _toggle_topic
+from test_browser import _server, _toggle_topic
 
 
 @pytest.mark.browser
@@ -76,7 +77,7 @@ def test_focused_review_pdf_edit_and_filtered_progress(engine):
                 await expect(dialog.locator('.focus-claim h3')).to_have_text(first['text'])
                 await dialog.get_by_role('button', name='Mark unreviewed', exact=True).click()
                 await expect(page.locator('#focus-progress')).to_have_text('Claim 1 of 2 · 0 reviewed')
-                await dialog.get_by_role('button', name='Edit claim', exact=True).click()
+                await dialog.get_by_role('button', name=re.compile('^(Edit claim|Resume edits)$')).click()
                 await dialog.get_by_label('Locator', exact=True).fill('p. 2')
                 await dialog.get_by_label('Claim', exact=True).fill('Recovery depends on the task.')
                 await dialog.locator('textarea[name="note"]').fill('Check the task differences.')
@@ -84,12 +85,12 @@ def test_focused_review_pdf_edit_and_filtered_progress(engine):
                 await dialog.locator('textarea[name="note"]').press('r')
                 assert next(c for c in httpx.get(url + '/api/state').json()['claims']
                             if c['id'] == first['id'])['reviewed'] is False
-                await dialog.get_by_role('button', name='Save', exact=True).click()
+                await dialog.get_by_role('button', name='Done', exact=True).click()
                 await expect(dialog.locator('.focus-claim h3')).to_have_text('Recovery depends on the task.')
                 saved = httpx.get(url + '/api/papers/paper').json()['claims'][0]
                 assert saved['locator'] == 'p. 2' and saved['quote_verified'] is True
                 assert saved['note'].endswith('r')
-                await dialog.get_by_role('button', name='Edit claim', exact=True).focus()
+                await dialog.get_by_role('button', name=re.compile('^(Edit claim|Resume edits)$')).focus()
                 await page.keyboard.press('r')
                 await expect(page.locator('#focus-progress')).to_have_text('Claim 2 of 2 · 1 reviewed')
                 await page.keyboard.press('r')
@@ -127,7 +128,7 @@ def test_focused_review_updates_when_the_pdf_arrives_without_a_claim_change(engi
                 dialog = page.locator('#focused-review')
                 await expect(page.locator('#focus-passage')).to_contain_text('No PDF is available')
                 if editing:
-                    await dialog.get_by_role('button', name='Edit claim', exact=True).click()
+                    await dialog.get_by_role('button', name=re.compile('^(Edit claim|Resume edits)$')).click()
                     await dialog.get_by_label('Claim', exact=True).fill('Keep the unsaved claim wording.')
                     await dialog.get_by_label('Claim', exact=True).evaluate('el => el.setSelectionRange(8, 8)')
                 before = httpx.get(url + '/api/state').json()['claims']
@@ -135,7 +136,8 @@ def test_focused_review_updates_when_the_pdf_arrives_without_a_claim_change(engi
                 # Let the ordinary background poll notice the PDF, with no claim edit.
                 await expect(page.locator('#focus-pdf canvas')).to_be_visible(timeout=15000)
                 await expect(page.locator('#focus-passage')).to_contain_text('Quote found on page 1')
-                assert httpx.get(url + '/api/state').json()['claims'] == before
+                if not editing:
+                    assert httpx.get(url + '/api/state').json()['claims'] == before
                 if editing:
                     await expect(dialog.get_by_label('Claim', exact=True)).to_have_value('Keep the unsaved claim wording.')
                     await expect(dialog.get_by_label('Claim', exact=True)).to_be_focused()
@@ -146,7 +148,7 @@ def test_focused_review_updates_when_the_pdf_arrives_without_a_claim_change(engi
                 if editing:
                     await expect(dialog.get_by_label('Claim', exact=True)).to_have_value('Keep the unsaved claim wording.')
                     await expect(dialog.get_by_label('Claim', exact=True)).to_be_focused()
-                    await dialog.get_by_role('button', name='Cancel', exact=True).click()
+                    await dialog.get_by_role('button', name='Done', exact=True).click()
                 await dialog.get_by_role('button', name='Exit review', exact=True).click()
                 assert not errors
 
@@ -244,7 +246,7 @@ def test_focused_review_drafts_failed_save_missing_pdf_and_workspace(engine):
                 dialog = page.locator('#focused-review')
                 await expect(page.locator('#focus-passage')).to_contain_text('No PDF is available')
                 await expect(page.locator('#focus-pdf')).not_to_be_visible()
-                await dialog.get_by_role('button', name='Edit claim', exact=True).click()
+                await dialog.get_by_role('button', name=re.compile('^(Edit claim|Resume edits)$')).click()
                 await dialog.get_by_label('Claim', exact=True).fill('Keep this unsaved draft.')
                 await dialog.get_by_role('button', name='Next claim', exact=True).click()
                 await expect(dialog.locator('.focus-claim h3')).to_have_text(second['text'])
@@ -263,13 +265,15 @@ def test_focused_review_drafts_failed_save_missing_pdf_and_workspace(engine):
                         await route.continue_()
 
                 await page.route(endpoint, reject)
-                await dialog.get_by_role('button', name='Save', exact=True).click()
-                await expect(page.locator('#focus-error')).to_contain_text('Temporary storage failure')
-                await expect(dialog.get_by_label('Claim', exact=True)).to_have_value('Keep this unsaved draft.')
-                await expect(dialog.get_by_role('button', name='Save', exact=True)).to_be_enabled()
+                await dialog.get_by_label('Claim', exact=True).fill('Keep this unsaved draft. Retry')
+                await dialog.get_by_role('button', name='Done', exact=True).click()
+                await page.locator('#ask-cancel').click()
+                await expect(dialog.locator('[data-writing-status=claim]')).to_contain_text('Temporary storage failure')
+                await expect(dialog.get_by_label('Claim', exact=True)).to_have_value('Keep this unsaved draft. Retry')
+                await expect(dialog.get_by_role('button', name='Done', exact=True)).to_be_enabled()
                 await page.unroute(endpoint, reject)
-                await dialog.get_by_role('button', name='Save', exact=True).click()
-                await expect(dialog.locator('.focus-claim h3')).to_have_text('Keep this unsaved draft.')
+                await dialog.get_by_role('button', name='Done', exact=True).click()
+                await expect(dialog.locator('.focus-claim h3')).to_have_text('Keep this unsaved draft. Retry')
                 await dialog.get_by_role('button', name='Mark reviewed & next', exact=True).click()
                 await expect(page.locator('#focus-progress')).to_have_text('Claim 2 of 2 · 1 reviewed')
                 # A removed claim must not leave a review control targeting its old ID.
@@ -284,21 +288,20 @@ def test_focused_review_drafts_failed_save_missing_pdf_and_workspace(engine):
                 await page.set_viewport_size({'width': 650, 'height': 850})
                 await page.locator('#btn-focus-review').click()
                 assert await dialog.evaluate('el => el.scrollWidth <= el.clientWidth')
-                await dialog.get_by_role('button', name='Edit claim', exact=True).click()
+                await dialog.get_by_role('button', name=re.compile('^(Edit claim|Resume edits)$')).click()
                 assert await dialog.locator('.focus-details').evaluate('el => el.scrollWidth <= el.clientWidth')
-                await dialog.get_by_role('button', name='Cancel', exact=True).click()
+                await dialog.get_by_role('button', name='Done', exact=True).click()
                 await dialog.get_by_role('button', name='Exit review', exact=True).click()
                 await page.locator('#q').fill('no matching claims')
                 await expect(page.locator('#btn-focus-review')).to_be_hidden()
                 await expect(dialog).not_to_be_visible()
                 await page.locator('#q').fill('')
                 await page.locator('#btn-focus-review').click()
-                await dialog.get_by_role('button', name='Edit claim', exact=True).click()
+                await dialog.get_by_role('button', name=re.compile('^(Edit claim|Resume edits)$')).click()
                 await dialog.get_by_label('Claim', exact=True).fill('A draft belonging to the other workspace.')
                 await page.go_back()
                 await page.wait_for_function("V.view === 'library'")
                 await page.go_back()
-                await _answer(page, 'Discard and switch')
                 await expect(page.locator('#workspace')).to_have_value('default')
                 await expect(dialog).not_to_be_visible()
                 await page.locator('#btn-focus-review').click()

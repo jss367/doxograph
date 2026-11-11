@@ -5,6 +5,7 @@ from pathlib import Path
 
 import httpx
 import pytest
+from playwright.async_api import expect
 from browser_support import browser_session, run_browser
 
 from doxograph import config, store
@@ -122,7 +123,7 @@ def test_paper_reads_beside_its_notes(engine):
                 assert await page.locator('#passage-tools').is_hidden()
                 assert await page.evaluate("document.activeElement?.matches('[data-highlight-note]') === true")
                 await rail.locator('[data-highlight-note]').fill('Which conditions?')
-                await rail.get_by_role('button', name='Save note', exact=True).click()
+                await rail.get_by_role('button', name='Done', exact=True).click()
                 await ready(page)
                 await rail.locator('.highlight-entry .note p', has_text='Which conditions?').wait_for()
                 assert httpx.get(url+'/api/notebook').json()['highlights'][0]['note'] == 'Which conditions?'
@@ -234,7 +235,7 @@ def test_paper_reads_beside_its_notes(engine):
                 assert pages == [3, 2] and httpx.get(url+'/api/notebook').json()['reading'][0]['page'] == 2
                 await page.unroute('**/api/notebook')
                 # A highlight note being written survives a redraw and is a draft
-                # until saved; Cancel keeps the note on file.
+                # while its autosave is pending.
                 await rail.get_by_role('button', name='Edit note', exact=True).click()
                 await rail.locator('[data-highlight-note]').fill('An unsaved thought')
                 await page.locator('#reader-zoom').select_option('1.6')
@@ -258,9 +259,9 @@ def test_paper_reads_beside_its_notes(engine):
                 await page.locator('#papers li[data-paper="paper"]').click()
                 await page.locator('#reader .pdf-page[data-page="1"] .textLayer span').first.wait_for()
                 assert await rail.locator('[data-highlight-note]').input_value() == 'An unsaved thought'
-                await rail.get_by_role('button', name='Cancel', exact=True).click()
-                assert await rail.locator('[data-highlight-note]').count() == 0
-                assert httpx.get(url+'/api/notebook').json()['highlights'][0]['note'] == 'Which conditions?'
+                await rail.get_by_role('button', name='Done', exact=True).click()
+                await rail.locator('[data-highlight-note]').wait_for(state='detached')
+                assert httpx.get(url+'/api/notebook').json()['highlights'][0]['note'] == 'An unsaved thought'
                 await page.locator('#reader-zoom').select_option('fit')
                 await ready(page)
                 Path('.context').mkdir(exist_ok=True)
@@ -306,18 +307,12 @@ def test_paper_reads_beside_its_notes(engine):
                 await ready(page)
                 await page.wait_for_timeout(300)
                 assert httpx.get(url+'/api/notebook').json()['reading'][0]['status'] == 'finished'
-                # Switching workspaces with a highlight note being written asks
-                # first; declining keeps the editor and the workspace.
+                # Switching workspaces flushes the highlight note first.
                 await rail.get_by_role('button', name='Edit note', exact=True).click()
-                await rail.locator('[data-highlight-note]').fill('Not yet saved')
+                await rail.locator('[data-highlight-note]').fill('Saved when switching')
                 await page.locator('#workspace').select_option(other['id'])
-                await _answer(page, 'Cancel')
-                assert await page.locator('#workspace').input_value() == 'default'
-                assert await rail.locator('[data-highlight-note]').input_value() == 'Not yet saved'
-                await page.locator('#workspace').select_option(other['id'])
-                await _answer(page, 'Discard note')
                 await page.locator('#papers li[data-paper="elsewhere"]').wait_for()
-                assert httpx.get(url+'/api/notebook').json()['highlights'][0]['note'] == 'Which conditions?'
+                assert httpx.get(url+'/api/notebook').json()['highlights'][0]['note'] == 'Saved when switching'
                 await page.locator('#workspace').select_option('default')
                 await page.locator('#papers li[data-paper="paper"]').wait_for()
                 # An editor opened and left unchanged is closed by the switch
@@ -462,19 +457,12 @@ def test_reader_keeps_pages_notes_and_progress_under_pressure(engine):
                 assert drawn and all(n >= 18 for n in drawn), drawn
                 await saved_page(url, 24)
                 rail = page.locator('#content')
-                # Editing another highlight's note while one is being written asks
-                # first; Cancel keeps the first editor and its text.
+                # Opening another note flushes the previous editor.
                 await rail.locator('[data-highlight="first"]').get_by_role('button', name='Edit note', exact=True).click()
                 await rail.locator('[data-highlight-note="first"]').fill('Note A, revised')
                 await rail.locator('[data-highlight="second"]').get_by_role('button', name='Add note', exact=True).click()
-                await _answer(page, 'Cancel')
-                assert await rail.locator('[data-highlight-note="first"]').input_value() == 'Note A, revised'
-                assert await rail.locator('[data-highlight-note="second"]').count() == 0
-                await rail.locator('[data-highlight="second"]').get_by_role('button', name='Add note', exact=True).click()
-                await _answer(page, 'Discard note')
                 await rail.locator('[data-highlight-note="second"]').wait_for()
-                assert await rail.locator('[data-highlight-note="first"]').count() == 0
-                assert httpx.get(url+'/api/notebook').json()['highlights'][0]['note'] == 'Note A'
+                assert httpx.get(url+'/api/notebook').json()['highlights'][0]['note'] == 'Note A, revised'
                 # Typing while a slow save runs is kept: the save lands what was
                 # there when Save was clicked, and the editor stays open with the rest.
                 held, release = [], asyncio.Event()
@@ -483,18 +471,17 @@ def test_reader_keeps_pages_notes_and_progress_under_pressure(engine):
                     await route.continue_()
                 await page.route('**/api/notebook', hold_first)
                 await rail.locator('[data-highlight-note="second"]').fill('Note B')
-                await rail.get_by_role('button', name='Save note', exact=True).click()
                 deadline = time.monotonic() + 6
                 while not held and time.monotonic() < deadline: await asyncio.sleep(.1)
                 assert held
-                assert await rail.get_by_role('button', name='Save note', exact=True).is_disabled()
+                assert await rail.locator('[data-highlight-note=second]').is_enabled()
                 await rail.locator('[data-highlight-note="second"]').press('End')
                 await rail.locator('[data-highlight-note="second"]').type(', continued')
                 release.set()
                 await ready(page)
-                await page.locator('#toasts .toast', has_text='still in the editor').wait_for()
+                await expect(rail.locator('[data-mark-save-status]')).to_have_text('Saved')
                 assert await rail.locator('[data-highlight-note="second"]').input_value() == 'Note B, continued'
-                assert httpx.get(url+'/api/notebook').json()['highlights'][1]['note'] == 'Note B'
+                assert httpx.get(url+'/api/notebook').json()['highlights'][1]['note'] == 'Note B, continued'
                 await page.unroute('**/api/notebook')
                 # A save that fails keeps the editor and its text.
                 failures = []
@@ -503,16 +490,17 @@ def test_reader_keeps_pages_notes_and_progress_under_pressure(engine):
                         failures.append(route.request.url); await route.fulfill(status=503, content_type='application/json', body='{"detail": "The notebook is down."}')
                     else: await route.continue_()
                 await page.route('**/api/notebook', fail_once)
-                await rail.get_by_role('button', name='Save note', exact=True).click()
+                await rail.locator('[data-highlight-note=second]').fill('Note B, retry')
+                await rail.get_by_role('button', name='Done', exact=True).click()
                 await ready(page)
-                await page.locator('#toasts .toast', has_text='The notebook is down.').wait_for()
+                await expect(rail.locator('[data-mark-save-status]')).to_contain_text('The notebook is down.')
                 assert failures
-                assert await rail.locator('[data-highlight-note="second"]').input_value() == 'Note B, continued'
-                assert httpx.get(url+'/api/notebook').json()['highlights'][1]['note'] == 'Note B'
-                await rail.get_by_role('button', name='Save note', exact=True).click()
+                assert await rail.locator('[data-highlight-note="second"]').input_value() == 'Note B, retry'
+                assert httpx.get(url+'/api/notebook').json()['highlights'][1]['note'] == 'Note B, continued'
+                await rail.get_by_role('button', name='Done', exact=True).click()
                 await ready(page)
                 await rail.locator('[data-highlight-note="second"]').wait_for(state='detached')
-                assert httpx.get(url+'/api/notebook').json()['highlights'][1]['note'] == 'Note B, continued'
+                assert httpx.get(url+'/api/notebook').json()['highlights'][1]['note'] == 'Note B, retry'
                 await page.unroute('**/api/notebook')
                 # A page reached just before the PDF is put away, or another
                 # paper opened, is saved on the way out.
@@ -1229,6 +1217,17 @@ def test_mark_drafts_survive_a_refused_switch_a_removed_mark_and_a_late_resume(e
                 data['reading'] = [{'paper':'paper','status':'reading','page':2,'bookmarks':[]}]
                 data['highlights'] = [{'id':'one','paper':'paper','page':1,'rects':[rect],'text':'Recovery depends on conditions.','color':'yellow','note':'Saved note'}]
                 assert httpx.put(url+'/api/notebook', json=data).status_code == 200
+                # Workspace switches flush highlight autosave. Keep this note
+                # unsaved so declining the later claim prompt must preserve it,
+                # without interfering with reader progress or notebook reads.
+                async def refuse_note_save(route):
+                    payload = route.request.post_data_json if route.request.method == 'PUT' else {}
+                    if any(mark['id'] == 'one' and mark['note'] == 'Changed note'
+                           for mark in (payload or {}).get('highlights', [])):
+                        await route.fulfill(status=503, json={'detail': 'Synthetic unsaved note'})
+                    else:
+                        await route.continue_()
+                await page.route('**/api/notebook', refuse_note_save)
                 await page.goto(f"{url}/#view=claims")
                 await page.locator('#papers li[data-paper="paper"]').click()
                 rail = page.locator('#content')
@@ -1254,6 +1253,7 @@ def test_mark_drafts_survive_a_refused_switch_a_removed_mark_and_a_late_resume(e
                 await page.get_by_role('button', name='Cancel', exact=True).first.click()
                 # The mark is removed in another window while its note is open.
                 data = httpx.get(url+'/api/notebook').json()
+                assert data['highlights'][0]['note'] == 'Saved note'
                 data['highlights'] = []
                 assert httpx.put(url+'/api/notebook', json=data).status_code == 200
                 await _poll(page)
@@ -1264,6 +1264,7 @@ def test_mark_drafts_survive_a_refused_switch_a_removed_mark_and_a_late_resume(e
                 await _answer(page, 'Discard note')
                 await ready(page)
                 assert await recovery.count() == 0
+                await page.unroute('**/api/notebook', refuse_note_save)
                 # No phantom draft stands in the way of a switch now.
                 await page.locator('#workspace').select_option(other['id'])
                 await page.locator('#papers li[data-paper="elsewhere"]').wait_for()

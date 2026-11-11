@@ -915,11 +915,13 @@ def test_a_synthesis_sits_under_its_topic_cites_claims_and_can_be_corrected_by_h
                 assert await page.input_value("#q") == ""
 
                 # Correcting it by hand clears the stale mark and records the text.
-                # While the save is in flight the editor is frozen, as a claim
-                # form is, so nothing typed meanwhile is lost to the redraw.
+                # Autosaving leaves the field editable. A newer edit made
+                # during the first write must be persisted before Done closes.
                 release_save = asyncio.Event()
+                save_started = asyncio.Event()
 
                 async def hold_save(route):
+                    save_started.set()
                     await release_save.wait()
                     await route.continue_()
 
@@ -927,11 +929,12 @@ def test_a_synthesis_sits_under_its_topic_cites_claims_and_can_be_corrected_by_h
                 await synth.get_by_role("button", name="edit").click()
                 field = page.locator('textarea[data-synth="recovery"]')
                 await field.fill("Corrected [paper-a-c1].")
-                await page.get_by_role("button", name="Save", exact=True).click()
-                await page.locator('textarea[data-synth="recovery"]:disabled').wait_for()
-                assert await page.get_by_role("button", name="Cancel").is_disabled()
-                assert await page.get_by_role("button", name="Save", exact=True).is_disabled()
+                await asyncio.wait_for(save_started.wait(), timeout=5)
+                assert await field.is_enabled()
+                await field.fill("Corrected again [paper-a-c1].")
+                await synth.get_by_role("button", name="Done", exact=True).click()
                 release_save.set()
+                await field.wait_for(state="detached")
                 synth = page.locator('.synth[data-topic="recovery"]')
                 await synth.get_by_text("written by hand", exact=False).wait_for()
                 assert await synth.locator(".stale").count() == 0
@@ -939,7 +942,7 @@ def test_a_synthesis_sits_under_its_topic_cites_claims_and_can_be_corrected_by_h
 
     run_browser(scenario())
     [row] = store.synthesis_rows()
-    assert row["text"] == "Corrected [paper-a-c1]." and row["source"] == "hand" and row["stale"] is False
+    assert row["text"] == "Corrected again [paper-a-c1]." and row["source"] == "hand" and row["stale"] is False
 
 
 @pytest.mark.browser
@@ -954,6 +957,10 @@ def test_a_synthesis_draft_survives_navigation_and_opening_another_topics_editor
     async def scenario():
         async with browser_session("chromium") as browser:
             page = await browser.new_page()
+            async def refuse_save(route):
+                await route.fulfill(status=500, json={"detail": "Disk full"})
+
+            await page.route("**/api/syntheses/*", refuse_save)
             with _server() as url:
                 await page.goto(f"{url}/#view=claims")
                 recovery = page.locator('.synth[data-topic="recovery"]')
@@ -987,9 +994,14 @@ def test_a_synthesis_draft_survives_navigation_and_opening_another_topics_editor
                 await scaling.get_by_role("button", name="edit").click()
                 assert await page.locator('textarea[data-synth="scaling"]').input_value() == "Scaling draft."
 
-                # Cancel drops only that topic's draft.
-                await page.get_by_role("button", name="Cancel").click()
-                assert await fields.count() == 0
+                # A failed Done asks before discarding. Cancel keeps this
+                # topic's draft; explicit discard drops only this topic.
+                await scaling.get_by_role("button", name="Done").click()
+                await _answer(page, "Cancel")
+                assert await page.locator('textarea[data-synth="scaling"]').input_value() == "Scaling draft."
+                await scaling.get_by_role("button", name="Done").click()
+                await _answer(page, "Discard changes")
+                await fields.wait_for(state="detached")
                 await scaling.get_by_role("button", name="edit").click()
                 assert await page.locator('textarea[data-synth="scaling"]').input_value() == "Scaling as written."
                 await recovery.get_by_role("button", name="edit").click()
@@ -1000,7 +1012,7 @@ def test_a_synthesis_draft_survives_navigation_and_opening_another_topics_editor
 
 
 @pytest.mark.browser
-def test_a_claim_being_edited_keeps_its_text_when_a_synthesis_editor_is_cancelled_or_saved():
+def test_a_claim_being_edited_keeps_its_text_when_a_synthesis_editor_is_finished():
     _paper("paper-a", "Paper A", "recovery")
     _paper("paper-b", "Paper B", "recovery")
     shown = {r["id"]: r for r in store.claim_rows()}
@@ -1018,19 +1030,18 @@ def test_a_claim_being_edited_keeps_its_text_when_a_synthesis_editor_is_cancelle
                 await page.locator('[data-act="edit"][data-claim="paper-a-c1"]').click()
                 await claim_field.fill("Claim text typed before the synthesis editor opened.")
 
-                # Claim fields are only read back on a redraw, so a synthesis
-                # action that redraws must capture them first or the typing
-                # since the last redraw is gone.
+                # A synthesis action may redraw, but must preserve the latest
+                # claim typing, including edits whose autosave is pending.
                 await synth.get_by_role("button", name="edit").click()
                 await claim_field.fill("Claim text typed while the synthesis editor was open.")
-                await synth.get_by_role("button", name="Cancel").click()
+                await synth.get_by_role("button", name="Done").click()
                 await synth_field.wait_for(state="hidden")
                 assert await claim_field.input_value() == "Claim text typed while the synthesis editor was open."
 
                 await synth.get_by_role("button", name="edit").click()
                 await synth_field.fill("Recovery corrected.")
                 await claim_field.fill("Claim text typed before the synthesis was saved.")
-                await synth.get_by_role("button", name="Save").click()
+                await synth.get_by_role("button", name="Done").click()
                 await synth_field.wait_for(state="hidden")
                 await synth.get_by_text("Recovery corrected.").wait_for()
                 assert await claim_field.input_value() == "Claim text typed before the synthesis was saved."
@@ -1040,7 +1051,7 @@ def test_a_claim_being_edited_keeps_its_text_when_a_synthesis_editor_is_cancelle
 
 
 @pytest.mark.browser
-def test_escape_cancels_only_the_editor_holding_the_cursor_and_a_claim_save_redraws_its_form_away():
+def test_escape_finishes_only_the_editor_holding_the_cursor_and_claim_done_closes_its_form():
     _paper("paper-a", "Paper A", "recovery")
     _paper("paper-b", "Paper B", "recovery")
     shown = {r["id"]: r for r in store.claim_rows()}
@@ -1078,15 +1089,17 @@ def test_escape_cancels_only_the_editor_holding_the_cursor_and_a_claim_save_redr
                 await synth.get_by_role("button", name="edit").click()
                 await synth_field.fill("Synthesis draft kept across a claim save.")
                 await claim_field.fill("Claim saved while the synthesis editor was open.")
-                await claim_form.get_by_role("button", name="Save").click()
+                await claim_form.get_by_role("button", name="Done").click()
                 await claim_form.wait_for(state="hidden")
                 await page.get_by_text("Claim saved while the synthesis editor was open.").wait_for()
                 assert await synth_field.input_value() == "Synthesis draft kept across a claim save."
+                await synth.get_by_role("button", name="Done").click()
+                await synth_field.wait_for(state="detached")
 
     run_browser(scenario())
     saved = {r["id"]: r for r in store.claim_rows()}
     assert saved["paper-a-c1"]["text"] == "Claim saved while the synthesis editor was open."
-    assert [row["text"] for row in store.synthesis_rows()] == ["Recovery as written."]
+    assert [row["text"] for row in store.synthesis_rows()] == ["Synthesis draft kept across a claim save."]
 
 
 @pytest.mark.browser
@@ -1143,18 +1156,17 @@ def test_the_research_context_and_ledger_are_edited_in_the_app():
                 await _poll(page)
                 await nav.click()
                 assert await rows.nth(1).locator('[name="ledger-text"]').input_value() == "Steering is reversible."
-                # Nor must leaving for a paper and coming back: the draft is
-                # kept, and the sidebar says so meanwhile.
+                # Leaving for a paper and coming back preserves the writing,
+                # whether the autosave has already acknowledged it or not.
                 await page.locator('#papers [data-paper="paper-a"]').click()
                 await page.locator('.claim[data-claim="paper-a-c1"]').wait_for(state="visible")
-                await page.wait_for_function("researchFormDirty()")
                 await nav.click()
                 form = page.locator("#research-form")
                 await form.wait_for(state="visible")
                 rows = form.locator("[data-ledger-row]")
                 assert await rows.nth(1).locator('[name="ledger-text"]').input_value() == "Steering is reversible."
                 assert await form.locator('[name="context"]').input_value() == "Steering vectors and what recovers from them."
-                await form.get_by_role("button", name="Save").click()
+                await form.get_by_role("button", name="Done").click()
 
                 # Back on the claims, and the sidebar counts the new state.
                 await page.locator('.claim[data-claim="paper-a-c1"]').wait_for(state="visible")
@@ -1189,14 +1201,15 @@ def test_a_refused_research_save_keeps_what_was_typed_and_writes_nothing():
                 await nav.click()
                 form = page.locator("#research-form")
                 await form.wait_for(state="visible")
-                await form.locator('[name="context"]').fill("A context that must not be saved.")
                 await form.get_by_role("button", name="Add a claim").click()
                 rows = form.locator("[data-ledger-row]")
                 # The new row takes the first free id, not the row count.
                 assert await rows.nth(2).locator('[name="ledger-id"]').input_value() == "L2"
                 await rows.nth(2).locator('[name="ledger-id"]').fill("L1")
                 await rows.nth(2).locator('[name="ledger-text"]').fill("Typed, then refused.")
-                await form.get_by_role("button", name="Save").click()
+                await form.locator('[name="context"]').fill("A context that must not be saved.")
+                await form.get_by_role("button", name="Done").click()
+                await _answer(page, "Cancel")
                 await page.locator("#content .warn").get_by_text("used twice", exact=False).wait_for()
                 # The form is as typed, not redrawn from what was saved before,
                 # and it is editable again now that the save has settled.
@@ -1266,7 +1279,7 @@ def test_saving_the_research_form_writes_only_the_fields_that_were_edited():
                 await page.wait_for_function(
                     "S.context === 'Changed from the shell while the form was open.'")
                 await form.locator('[name="ledger-text"]').fill("Recovery is path-dependent, at every scale.")
-                await form.get_by_role("button", name="Save").click()
+                await form.get_by_role("button", name="Done").click()
                 await page.locator('.claim[data-claim="paper-a-c1"]').wait_for(state="visible")
                 await page.wait_for_function("S.ledger.length === 1")
 
@@ -2116,7 +2129,7 @@ def test_a_bulk_review_reaches_a_claim_whose_editor_is_open():
                 assert await form.locator('textarea[name="text"]').input_value() == "One, reworded."
                 await reviewed.wait_for()
                 assert await reviewed.is_checked()
-                await form.get_by_role("button", name="Save").click()
+                await form.get_by_role("button", name="Done").click()
                 await form.wait_for(state="detached")
 
     run_browser(scenario())
@@ -2225,6 +2238,14 @@ def test_a_refused_workspace_switch_leaves_the_entry_alone():
     async def scenario():
         async with browser_session("chromium") as browser:
             page = await browser.new_page()
+            # Keep a genuinely unsaved draft regardless of debounce timing.
+            async def refuse_save(route, request):
+                if request.method == "PATCH":
+                    await route.fulfill(status=500, json={"detail": "Disk full"})
+                else:
+                    await route.continue_()
+
+            await page.route("**/api/papers/shared/claims/shared-c1", refuse_save)
             with _server() as url:
                 await page.goto(f"{url}/#view=claims")
                 await page.locator('#papers [data-paper="shared"]').click()
@@ -2387,7 +2408,7 @@ def test_r_does_not_move_on_when_the_review_did_not_happen():
                 await page.locator(f'.claim.sel[data-claim="{one}"]').wait_for()
                 await page.locator(f'[data-act="edit"][data-claim="{one}"]').click()
                 await page.locator(f'form[data-form="{one}"] textarea[name="text"]').fill("One, edited.")
-                await page.locator(f'form[data-form="{one}"]').get_by_role("button", name="Save").click()
+                await page.locator(f'form[data-form="{one}"]').get_by_role("button", name="Done").click()
                 await asyncio.wait_for(started.wait(), timeout=5)
 
                 # The save holds the claim; r cannot review it, so it stays put.
@@ -2418,11 +2439,20 @@ def test_a_deleted_synthesis_takes_its_parked_draft_with_it():
     async def scenario():
         async with browser_session("chromium") as browser:
             page = await browser.new_page()
+            # Keep a genuinely unsaved draft regardless of debounce timing.
+            async def refuse_save(route, request):
+                if request.method == "PATCH":
+                    await route.fulfill(status=500, json={"detail": "Disk full"})
+                else:
+                    await route.continue_()
+
+            await page.route("**/api/syntheses/recovery", refuse_save)
             with _server() as url:
                 await page.goto(f"{url}/#view=claims")
                 synth = page.locator('.synth[data-topic="recovery"]')
                 await synth.get_by_role("button", name="edit").click()
                 await page.locator('textarea[data-synth="recovery"]').fill("A draft that is parked.")
+                await page.locator('[data-writing-status="synthesis"]', has_text="Couldn’t save").wait_for()
 
                 # Reading a paper parks the draft; coming back and deleting the
                 # synthesis has to take it too.
@@ -2481,11 +2511,11 @@ def test_undoing_a_bulk_review_freezes_the_editors_it_is_undoing():
 
                 await notice.get_by_role("button", name="Undo").click()
                 await asyncio.wait_for(started.wait(), timeout=5)
-                assert await form.get_by_role("button", name="Save").is_disabled()
+                assert await form.get_by_role("button", name="Done").is_disabled()
                 release.set()
 
                 await page.locator(f'form[data-form="{one}"] [name="reviewed"]:not(:checked)').wait_for()
-                await form.get_by_role("button", name="Save").click()
+                await form.get_by_role("button", name="Done").click()
                 await form.wait_for(state="detached")
 
     run_browser(scenario())
@@ -2537,6 +2567,14 @@ def test_moving_forward_withdraws_the_question_back_was_asking():
     async def scenario():
         async with browser_session("chromium") as browser:
             page = await browser.new_page()
+            # Keep a genuinely unsaved draft regardless of debounce timing.
+            async def refuse_save(route, request):
+                if request.method == "PATCH":
+                    await route.fulfill(status=500, json={"detail": "Disk full"})
+                else:
+                    await route.continue_()
+
+            await page.route("**/api/papers/shared/claims/shared-c1", refuse_save)
             with _server() as url:
                 await page.goto(f"{url}/#view=claims")
                 await page.locator('#papers [data-paper="shared"]').click()
@@ -2627,7 +2665,7 @@ def test_a_bulk_review_waits_for_a_save_already_on_its_way():
                 await page.locator(f'[data-act="edit"][data-claim="{one}"]').click()
                 form = page.locator(f'form[data-form="{one}"]')
                 await form.locator('textarea[name="text"]').fill("One, edited.")
-                await form.get_by_role("button", name="Save").click()
+                await form.get_by_role("button", name="Done").click()
                 await asyncio.wait_for(started.wait(), timeout=5)
 
                 await page.locator(".paper-actions > summary").click()
@@ -2838,7 +2876,7 @@ def test_undoing_a_bulk_review_waits_for_a_save_already_on_its_way():
                 await page.locator(f'[data-act="edit"][data-claim="{one}"]').click()
                 form = page.locator(f'form[data-form="{one}"]')
                 await form.locator('textarea[name="text"]').fill("One, edited.")
-                await form.get_by_role("button", name="Save").click()
+                await form.get_by_role("button", name="Done").click()
                 await asyncio.wait_for(started.wait(), timeout=5)
                 await notice.get_by_role("button", name="Undo").click()
                 await page.locator("#toasts .toast", has_text="Wait for the change in flight").wait_for()
@@ -2978,22 +3016,21 @@ def test_back_returns_to_the_research_form_after_leaving_it():
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(f"{url}/#view=claims")
-                for leave in ["Cancel", "Save"]:
-                    await page.locator('#btn-workspace').click()
-                    await page.locator("#research-form").wait_for()
-                    assert "view=research" in page.url
-                    await page.locator("#research-form").get_by_role(
-                        "button", name=leave, exact=True).click()
-                    await page.locator('.claim[data-claim="paper-a-c1"]').wait_for()
-                    assert "view=research" not in page.url
+                await page.locator('#btn-workspace').click()
+                await page.locator("#research-form").wait_for()
+                assert "view=research" in page.url
+                await page.locator("#research-form").get_by_role(
+                    "button", name="Done", exact=True).click()
+                await page.locator('.claim[data-claim="paper-a-c1"]').wait_for()
+                assert "view=research" not in page.url
 
-                    # Back goes back to the form rather than appearing to do
-                    # nothing, which is what replacing its entry looked like.
-                    await page.go_back()
-                    await page.locator("#research-form").wait_for()
-                    await page.locator('#btn-workspace[aria-current="page"]').wait_for()
-                    await page.go_forward()
-                    await page.locator('.claim[data-claim="paper-a-c1"]').wait_for()
+                # Back goes back to the form rather than appearing to do
+                # nothing, which is what replacing its entry looked like.
+                await page.go_back()
+                await page.locator("#research-form").wait_for()
+                await page.locator('#btn-workspace[aria-current="page"]').wait_for()
+                await page.go_forward()
+                await page.locator('.claim[data-claim="paper-a-c1"]').wait_for()
 
     run_browser(scenario())
 
@@ -3217,7 +3254,7 @@ def test_editing_a_quote_closes_the_passage_worked_out_from_the_old_one():
                 await page.get_by_role("button", name="edit", exact=True).click()
                 await page.locator('textarea[name="quote"]').fill(
                     "Recovery under steering is a path-dependent outcome across all scales.")
-                await page.get_by_role("button", name="Save", exact=True).click()
+                await page.get_by_role("button", name="Done", exact=True).click()
                 await page.locator(".claim .qflag").wait_for(state="detached")
                 assert await page.locator(".qctx").count() == 0
 
@@ -4419,7 +4456,7 @@ def test_a_synthesis_saved_by_hand_settles_a_held_claim_delete_first():
 
                 await editor.fill("The two that are left report it.")
                 await page.locator('.synth[data-topic="recovery"]').get_by_role(
-                    "button", name="Save", exact=True).click()
+                    "button", name="Done", exact=True).click()
                 await page.locator('textarea[data-synth="recovery"]').wait_for(
                     state="detached", timeout=10000)
 
@@ -4821,7 +4858,7 @@ def test_a_claim_note_is_written_in_the_editor_and_the_search_finds_it():
                 await page.locator('form[data-form="paper-a-c1"] textarea[name="note"]').fill(
                     "Overstated: the appendix contradicts this.")
                 await page.locator('form[data-form="paper-a-c1"]').get_by_role(
-                    "button", name="Save").click()
+                    "button", name="Done").click()
                 await page.locator('.claim[data-claim="paper-a-c1"] .note').get_by_text(
                     "Overstated: the appendix contradicts this.").wait_for()
 
@@ -4959,11 +4996,13 @@ def test_a_claim_being_edited_keeps_its_text_when_a_note_editor_is_closed():
                 await note_field.wait_for(state="hidden")
                 await page.locator(".paper-overview .note").get_by_text("A note of my own.").wait_for()
                 assert await claim_field.input_value() == "Claim text typed before the note was saved."
+                # Its own autosave persists the claim without closing it.
+                await page.locator('[data-writing-status="claim"]', has_text="Saved").wait_for()
+                assert await claim_field.is_visible()
 
     run_browser(scenario())
     assert store.load_paper("paper-a")["notes"] == "A note of my own."
-    # The claim itself was never saved: its editor was reopened, not submitted.
-    assert store.load_paper("paper-a")["claims"][0]["text"] == "A claim from Paper A."
+    assert store.load_paper("paper-a")["claims"][0]["text"] == "Claim text typed before the note was saved."
 
 
 @pytest.mark.browser
@@ -5128,7 +5167,7 @@ def test_a_saved_claim_form_is_drawn_away_while_a_note_editor_is_open():
                 form = page.locator('form[data-form="paper-a-c1"]')
                 await page.locator('[data-act="edit"][data-claim="paper-a-c1"]').click()
                 await form.locator('[name="text"]').fill("Corrected by hand.")
-                await form.get_by_role("button", name="Save").click()
+                await form.get_by_role("button", name="Done").click()
 
                 # The form goes, the note editor stays.
                 await form.wait_for(state="detached", timeout=10000)
@@ -5166,7 +5205,7 @@ def test_a_claim_save_landing_late_leaves_the_research_form_alone():
                 form = page.locator('form[data-form="paper-a-c1"]')
                 await page.locator('[data-act="edit"][data-claim="paper-a-c1"]').click()
                 await form.locator('[name="text"]').fill("Corrected by hand.")
-                await form.get_by_role("button", name="Save").click()
+                await form.get_by_role("button", name="Done").click()
                 await asyncio.wait_for(in_flight.wait(), 10)
 
                 await page.locator('#btn-workspace').click()
@@ -5176,9 +5215,9 @@ def test_a_claim_save_landing_late_leaves_the_research_form_alone():
                 await context.evaluate("el => el.setSelectionRange(7, 7)")
 
                 release.set()
-                # The save is done once the claim is no longer held: `markSaving`
-                # is cleared in a `finally`, after every redraw the answer makes.
-                await page.wait_for_function("savingClaims.size === 0", timeout=10000)
+                # Wait for the actual autosave response, not the independent
+                # manual review lock, before checking focus ownership.
+                await page.wait_for_function("!writingInFlight('claim', 'paper-a-c1')", timeout=10000)
                 assert await _cursor(page, "#research-context") == {
                     "value": "What I am studying, typed while the claim saved.",
                     "focused": True, "start": 7}
@@ -5665,7 +5704,7 @@ _REFUSED_ACTIONS = {
     "find-tensions": ("**/api/tensions", "Could not start the pass: Disk full"),
     "find-agreements": ("**/api/agreements", "Could not start the pass: Disk full"),
     "synthesize": ("**/api/syntheses", "Could not start the synthesis: Disk full"),
-    "save-synth": ("**/api/syntheses/recovery", "Could not save the synthesis: Disk full"),
+    "save-synth": ("**/api/syntheses/recovery", "Couldn’t save. Disk full"),
     "save-note": ("**/api/papers/paper-a", "Couldn’t save. Disk full"),
 }
 
@@ -5674,9 +5713,9 @@ _REFUSED_ACTIONS = {
 @pytest.mark.parametrize("action", list(_REFUSED_ACTIONS))
 def test_every_action_refused_while_the_reads_are_refused_too_still_says_so(action):
     """As for the answer to a proposed topic above: the tension and agreement
-    buttons, the quote check, the passes and the two editors' saves all put
-    their refusal in the warning line and then refresh, and a refresh that
-    throws never draws it. The editors' saves also leave the editor frozen."""
+    buttons, quote check, passes and editors must surface write failures even
+    when state refreshes also fail. Failed autosaves must keep editable text,
+    and cancelling the discard question must not abandon it."""
     _paper("paper-a", "Paper A", "recovery")
     _paper("paper-b", "Paper B", "recovery")
     _paper("paper-c", "Paper C", "recovery")
@@ -5738,6 +5777,7 @@ def test_every_action_refused_while_the_reads_are_refused_too_still_says_so(acti
                     field = page.locator('textarea[data-synth="recovery"]')
                     await field.fill("Recovery corrected.")
                     await page.locator('[data-act="save-synth"]').click()
+                    await _answer(page, "Cancel")
                 elif action == "save-note":
                     await page.locator('#papers [data-paper="paper-a"]').click()
                     field = page.locator('textarea[data-note="paper-a"]')
@@ -5781,8 +5821,8 @@ def test_a_saved_claim_whose_read_back_fails_closes_its_editor():
                 form = page.locator(f'form[data-form="{one}"]')
                 await form.locator('textarea[name="text"]').fill("One, edited.")
                 refusing.set()
-                await form.get_by_role("button", name="Save").click()
-                await page.wait_for_function(f"!isSaving({one!r})")
+                await form.get_by_role("button", name="Done").click()
+                await form.wait_for(state="detached")
                 assert await form.count() == 0
                 assert await page.locator("#toasts .toast.warn").count() == 0
                 refusing.clear()
@@ -5828,19 +5868,20 @@ def test_escape_outside_the_claim_form_leaves_its_draft_alone():
                 assert await claim_form.is_visible()
                 assert await claim_field.input_value() == "Draft that Escape elsewhere must keep."
 
-                # From inside the form, Escape still cancels the editor.
+                # From inside the form, Escape saves and closes the editor.
                 await claim_field.press("Escape")
                 await claim_form.wait_for(state="hidden")
 
-                # And so does the page's own Escape, with nothing focused.
+                # The page's own Escape also finishes the editor when no
+                # other control owns focus.
                 await page.locator('[data-act="edit"][data-claim="paper-a-c1"]').click()
-                await claim_field.fill("Draft the page's own Escape cancels.")
+                await claim_field.fill("Draft the page's own Escape saves.")
                 await page.evaluate("document.activeElement.blur()")
                 await page.keyboard.press("Escape")
                 await claim_form.wait_for(state="hidden")
 
     run_browser(scenario())
-    assert store.claim_rows()[0]["text"] == "A claim from Paper A."
+    assert store.claim_rows()[0]["text"] == "Draft the page's own Escape saves."
 
 
 @pytest.mark.browser

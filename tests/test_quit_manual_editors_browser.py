@@ -23,8 +23,8 @@ async def resume(page):
 
 
 async def cancel(page, kind, identity):
-    target = f'form[data-form="{identity}"] [data-act="cancel"]' if kind == 'claim' else '[data-act="cancel-synth"]' if kind == 'synthesis' else '[data-act="cancel-research"]'
-    await page.locator(target).first.click()
+    # Closing an existing editor now flushes its writing.
+    await save(page, kind, identity)
 
 
 async def save(page, kind, identity):
@@ -44,8 +44,8 @@ def stored(url, kind, identity):
 @pytest.mark.browser
 @pytest.mark.parametrize('engine', ['chromium', 'webkit'])
 @pytest.mark.parametrize('kind', ['claim', 'synthesis', 'research'])
-@pytest.mark.parametrize('decision', ['save-after-stay', 'discard-after-stay', 'quit-anyway'])
-def test_manual_writing_warns_and_preserves_explicit_choices(engine, kind, decision):
+@pytest.mark.parametrize('parked', [False, True])
+def test_quit_flushes_existing_writing(engine, kind, parked):
     _, claims, _ = seed()
 
     async def scenario():
@@ -54,46 +54,21 @@ def test_manual_writing_warns_and_preserves_explicit_choices(engine, kind, decis
             with _server() as url:
                 await page.goto(url+'/#view=claims')
                 field, identity = await editor(page, kind, claims)
-                original = stored(url, kind, identity)
-                await field.fill('Manual writing before quit')
-                assert await page.evaluate('window.doxographSaveDrafts()') is False
-                assert stored(url, kind, identity) == original
+                await field.fill('Writing before quit')
+                if parked:
+                    await page.evaluate("openPageView('library')")
                 report = await frozen_report(page)
-                assert report['saved'] is False and report['snapshot']
-                await page.keyboard.type('Blocked while frozen')
-                await expect(field).to_have_value('Manual writing before quit')
-                # The native actual-handler probe verifies the affirmative choice
-                # uses this identical nonnil snapshot once, without a second alert.
-                assert await frozen_report(page) == report
-                if decision == 'quit-anyway':
-                    await page.close()  # Model the explicitly accepted loss; never quit the app.
-                    page = await browser.new_page()
-                    await page.goto(url)
-                    assert stored(url, kind, identity) == original
-                    assert await page.evaluate('window.doxographSaveDrafts()') is True
-                    return
-                await resume(page)  # Don't Quit retains both form and writing.
-                await expect(field).to_have_value('Manual writing before quit')
-                await field.fill('Manual writing after Stay')
-                changed = await frozen_report(page)
-                assert changed['saved'] is False and changed['snapshot'] != report['snapshot']
+                assert report['saved'] is True
+                assert stored(url, kind, identity) == 'Writing before quit'
                 await resume(page)
-                if decision == 'save-after-stay':
-                    await save(page, kind, identity)
-                    await page.wait_for_function('!savingClaims.size && !V.synthSaving && !V.researchSaving && !hasWorkspaceDrafts()')
-                    assert stored(url, kind, identity) == 'Manual writing after Stay'
-                else:
-                    await cancel(page, kind, identity)
-                    assert stored(url, kind, identity) == original
-                assert await page.evaluate('window.doxographSaveDrafts()') is True
     run_browser(asyncio.wait_for(scenario(), 20))
 
 
 @pytest.mark.browser
 @pytest.mark.parametrize('engine', ['chromium', 'webkit'])
 @pytest.mark.parametrize('kind', ['claim', 'synthesis', 'research'])
-@pytest.mark.parametrize('success', [False, True], ids=['failed-save', 'acknowledged-save'])
-def test_pending_manual_save_cannot_report_success_before_its_answer(engine, kind, success):
+@pytest.mark.parametrize('success', [False, True])
+def test_quit_waits_for_save_and_preserves_failures(engine, kind, success):
     _, claims, _ = seed()
 
     async def scenario():
@@ -102,13 +77,12 @@ def test_pending_manual_save_cannot_report_success_before_its_answer(engine, kin
             started, release = asyncio.Event(), asyncio.Event()
 
             async def hold(route):
-                if route.request.method in ('PATCH', 'PUT'):
-                    started.set()
-                    await release.wait()
-                    if not success:
-                        await route.fulfill(status=503, json={'detail':'Synthetic manual save failure'})
-                        return
-                await route.continue_()
+                started.set()
+                await release.wait()
+                if success:
+                    await route.continue_()
+                else:
+                    await route.fulfill(status=503, json={'detail':'Synthetic save failure'})
 
             with _server() as url:
                 await page.goto(url+'/#view=claims')
@@ -116,46 +90,21 @@ def test_pending_manual_save_cannot_report_success_before_its_answer(engine, kin
                 path = f'/api/papers/study/claims/{identity}' if kind == 'claim' else '/api/syntheses/recovery' if kind == 'synthesis' else '/api/context'
                 await page.route('**'+path, hold)
                 original = stored(url, kind, identity)
-                await field.fill('Manual save in flight')
-                await save(page, kind, identity)
+                await field.fill('Writing in flight')
+                task = asyncio.create_task(frozen_report(page))
                 try:
                     await asyncio.wait_for(started.wait(), 5)
-                    report = await frozen_report(page)
-                    assert report['saved'] is False
+                    assert not task.done()
                     assert stored(url, kind, identity) == original
                     release.set()
-                    await page.wait_for_function('!savingClaims.size && !V.synthSaving && !V.researchSaving')
-                    assert await page.evaluate('window.doxographSaveDrafts()') is success, await page.evaluate('[V.view,V.researchDraft,V.researchBase,S.context,Boolean(document.querySelector("#research-form")),hasWorkspaceDrafts(),V.researchSaving]')
-                    assert stored(url, kind, identity) == ('Manual save in flight' if success else original)
+                    assert (await task)['saved'] is success
                     await resume(page)
+                    await expect(field).to_have_value('Writing in flight')
                     if not success:
-                        await expect(field).to_have_value('Manual save in flight')
-                        await cancel(page, kind, identity)
+                        await page.unroute('**'+path, hold)
                         assert await page.evaluate('window.doxographSaveDrafts()') is True
+                    assert stored(url, kind, identity) == 'Writing in flight'
                 finally:
                     release.set()
-    run_browser(asyncio.wait_for(scenario(), 20))
-
-
-@pytest.mark.browser
-@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
-@pytest.mark.parametrize('kind', ['claim', 'synthesis', 'research'])
-def test_parked_manual_writing_remains_part_of_quit_consent(engine, kind):
-    _, claims, _ = seed()
-
-    async def scenario():
-        async with browser_session(engine) as browser:
-            page = await browser.new_page(viewport={'width':1440, 'height':1000})
-            with _server() as url:
-                await page.goto(url+'/#view=claims')
-                field, identity = await editor(page, kind, claims)
-                original = stored(url, kind, identity)
-                await field.fill('Parked manual writing')
-                await page.evaluate("openPageView('library')")
-                assert await page.evaluate('V.view') == 'library'
-                assert await page.evaluate('window.doxographSaveDrafts()') is False
-                report = await frozen_report(page)
-                assert report['saved'] is False and 'Parked manual writing' in report['snapshot']
-                assert stored(url, kind, identity) == original
-                await resume(page)
+                    await task
     run_browser(asyncio.wait_for(scenario(), 20))

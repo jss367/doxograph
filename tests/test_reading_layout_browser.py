@@ -209,7 +209,7 @@ def test_claim_editor_fits_claims_drawer(engine, width):
                     });
                 }''')
                 await form.locator('textarea[name="note"]').fill('Edited beside the source.')
-                await form.get_by_role('button', name='Save', exact=True).click()
+                await form.get_by_role('button', name='Done', exact=True).click()
                 await expect(form).to_have_count(0)
                 assert store.load_paper('paper')['claims'][0]['note'] == 'Edited beside the source.'
     run_browser(scenario())
@@ -643,11 +643,13 @@ def test_a_failed_claim_save_shows_with_the_overview_hidden(engine):
                 await page.locator(f'#claims-drawer-list [data-act="edit"][data-claim="{claim["id"]}"]').click()
                 form = page.locator(f'#claims-drawer-list form[data-form="{claim["id"]}"]')
                 await form.locator('[name="text"]').fill('Oversight depends on the task.')
-                await form.get_by_role('button', name='Save', exact=True).click()
-                # Reported on the drawer's handle, which the hidden overview
-                # does not take with it, and not a second time beside the PDF.
-                warning = page.locator('#claims-drawer-bar .warn')
-                await expect(warning).to_contain_text('Could not save the claim')
+                # Autosave reports failure inside the visible editor even when
+                # the paper overview is hidden, and keeps the draft editable.
+                warning = form.locator('[data-writing-status="claim"]')
+                await expect(warning).to_contain_text('Saving is unavailable.')
+                await expect(warning).to_be_visible()
+                await expect(form.locator('[name="text"]')).to_be_enabled()
+                await expect(form.locator('[name="text"]')).to_have_value('Oversight depends on the task.')
                 await expect(warning).to_be_visible()
                 await expect(page.locator('#content .warn')).to_have_count(0)
                 await expect(form.locator('[name="text"]')).to_have_value('Oversight depends on the task.')
