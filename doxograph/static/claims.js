@@ -57,7 +57,7 @@ function selectClaim(id) {
 const savingClaims = new Map();   // claim id -> requests in flight for it
 
 function isSaving(id) {
-  return (savingClaims.get(id) || 0) > 0;
+  return (savingClaims.get(id) || 0) > 0 || writingInFlight('claim', id);
 }
 
 function markSaving(id, busy) {
@@ -70,7 +70,7 @@ function markSaving(id, busy) {
 
 function applySavingState() {
   document.querySelectorAll('form[data-form]').forEach((form) => {
-    const busy = isSaving(form.dataset.form);
+    const busy = (savingClaims.get(form.dataset.form) || 0) > 0;
     form.classList.toggle('saving', busy);
     form.querySelectorAll('input, textarea, select, button').forEach((field) => {
       field.disabled = busy;
@@ -321,7 +321,7 @@ function editForm(row, tagListId = 'taglist') {
     </div>`;
   const links = (row.ledger_links || []).concat([{ claim: '', relation: S.relations[0], note: '' }]);
   return `<div class="claim edit-wrap" data-claim="${esc(row.id)}" data-paper="${esc(row.paper)}">
-    <form class="edit" data-form="${esc(row.id)}">
+    <form class="edit" data-form="${esc(row.id)}" data-workspace="${esc(workspaceClient.workspaceId)}">
       <div><label>Claim</label><textarea name="text" rows="3">${esc(row.text)}</textarea></div>
       <div class="pair">
         <div><label>Kind</label><select name="kind">${options(S.kinds, row.kind)}</select></div>
@@ -351,8 +351,7 @@ function editForm(row, tagListId = 'taglist') {
         <textarea name="note" rows="2">${esc(row.note || '')}</textarea></div>
       <div class="row right">
         <label class="hint"><input type="checkbox" name="reviewed" ${row.reviewed ? 'checked' : ''}> reviewed</label>
-        <button type="button" data-act="cancel">Cancel</button>
-        <button type="submit" class="primary">Save</button>
+        ${row.id === NEW_CLAIM_ID ? '<button type="button" data-act="cancel">Cancel</button><button type="submit" class="primary">Save</button>' : writingStatus('claim', row.id) + '<button type="submit" class="primary">Done</button>'}
       </div>
     </form>
     <datalist id="${esc(tagListId)}">${S.tags.map((t) => `<option value="${esc(t.name)}">`).join('')}</datalist>
@@ -363,8 +362,13 @@ function editForm(row, tagListId = 'taglist') {
 
 // --- actions --------------------------------------------------------------
 
-function cancelEdit() {
-  if (isSaving(V.editing)) return;
+async function cancelEdit() {
+  const id = V.editing, owner = V.drafts;
+  if (V.editing && V.editing !== NEW_CLAIM_ID) {
+    captureOpenEditor();
+    if (!await writingAutosave('claim', V.editing).flush()) return;
+  }
+  if (V.editing !== id || V.drafts !== owner || isSaving(id)) return;
   if (V.editing) {
     delete V.drafts[V.editing]; // discard only this claim's draft
     delete V.quitClaimBases[V.editing];
@@ -753,6 +757,14 @@ $('panes').addEventListener('submit', async (event) => {
   if (!form) return;
   event.preventDefault();
   const wrap = form.closest('[data-claim]');
+  if (wrap.dataset.claim !== NEW_CLAIM_ID) {
+    const id = wrap.dataset.claim, owner = V.drafts;
+    V.drafts[id] = readForm(form);
+    if (await writingAutosave('claim', id).flush() && V.drafts === owner && V.editing === id) {
+      delete V.drafts[id]; V.editing = null; renderContent();
+    }
+    return;
+  }
   if (isSaving(wrap.dataset.claim)) return;   // a request for it is in flight
   // Which paper the save would land on: the one the card names, or for a claim
   // being written by hand the one the draft was started on. A removal in

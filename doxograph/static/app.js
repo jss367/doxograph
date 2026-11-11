@@ -499,6 +499,7 @@ function resetWorkspaceView() {
     quoteContext: null, textSearch: null, similar: null,
   });
   savingClaims.clear();
+  writingAutosaves.clear();
   dropTextSearch();
   $('q').value = '';
   $('kind').value = '';
@@ -568,7 +569,7 @@ function hasQuitWriting() {
   });
   const changedSyntheses = Object.entries(V.synthDrafts).some(([topic, text]) =>
     !Object.hasOwn(V.quitSynthBases, topic) || text !== V.quitSynthBases[topic].text);
-  return Boolean(changedClaims || changedSyntheses || V.newClaim || Object.keys(V.parkedNewClaims).length
+  return Boolean(writingUnconfirmed() || changedClaims || changedSyntheses || V.newClaim || Object.keys(V.parkedNewClaims).length
     || Object.keys(V.unconfirmedClaims).length || Object.keys(V.unconfirmedSyntheses).length
     || Object.keys(V.noteDrafts).length || topicNameDraft().trim()
     || (V.view === 'research' ? researchFormDirty() : V.researchDraft));
@@ -601,7 +602,7 @@ let discardedWorkspaceId = null;
 
 function canLeaveWorkspace() {
   if (deletingWorkspace) return false;
-  if (workspaceClient.pendingMutations || savingClaims.size || V.synthSaving || paperNotesSaving() || V.researchSaving) {
+  if (writingInFlight() || workspaceClient.pendingMutations || savingClaims.size || V.synthSaving || paperNotesSaving() || V.researchSaving) {
     toast('Wait for the current change to finish before switching workspaces.', { tone: 'warn' });
     return false;
   }
@@ -618,10 +619,9 @@ function canRestoreSavedVersion() {
 // after typing stops, and the words typed in that moment are saved here.
 window.doxographSaveDrafts = async () => {
   workspaceWritingSnapshot();
-  const saved = (await Promise.all([Datasets.flush(), Benchmarks.flush(), People.flush(), flushPaperNotes(),
+  const saved = (await Promise.all([Datasets.flush(), Benchmarks.flush(), People.flush(), flushPaperNotes(), flushWriting(), ResearchTools.flush(),
     typeof pageImports === 'undefined' ? true : pageImports.settle()])).every(Boolean);
-  // Manual editors keep Save/Cancel semantics. Capture DOM-only and parked
-  // writing after the waits too, and warn rather than silently saving a judgment.
+  // Capture again after the waits so later writing still prevents quitting.
   workspaceWritingSnapshot();
   return saved && !hasQuitWriting() && !savingClaims.size && !V.synthSaving && !V.researchSaving;
 };
@@ -637,14 +637,14 @@ window.doxographQuitWritingSnapshot = () => JSON.stringify([
 const workspaceController = createWorkspaceController(workspaceClient, {
   async prepare() {
     // A paper note that cannot save is a draft, which confirmLeave asks about.
-    await flushPaperNotes();
+    await Promise.all([flushPaperNotes(), flushWriting()]);
     return await Datasets.beforeWorkspaceSwitch() && await Benchmarks.beforeWorkspaceSwitch() && await People.beforeWorkspaceSwitch() && await ResearchTools.beforeWorkspaceSwitch();
   },
   showCurrent: renderWorkspacePicker,
   canLeave: canLeaveWorkspace,
   async confirmLeave() {
     const writing = workspaceWritingSnapshot();
-    if (hasWorkspaceDrafts() && !await confirmDialog('Switch workspaces and discard unsaved edits in this workspace?',
+    if (hasQuitWriting() && !await confirmDialog('Switch workspaces and discard unsaved edits in this workspace?',
                                                     { ok: 'Discard and switch' })) return false;
     discardedWorkspaceWriting = writing;
     discardedWorkspaceId = workspaceClient.workspaceId;
@@ -659,7 +659,7 @@ const workspaceController = createWorkspaceController(workspaceClient, {
     while (true) {
       if (!canLeaveWorkspace()) return false;
       const writing = workspaceWritingSnapshot();
-      if (!hasWorkspaceDrafts() || writing === discardedWorkspaceWriting) break;
+      if (!hasQuitWriting() || writing === discardedWorkspaceWriting) break;
       if (!await confirmDialog('Switch workspaces and discard edits made while the switch was waiting?',
                                { ok: 'Discard and switch' })) return false;
       discardedWorkspaceWriting = writing;
@@ -822,6 +822,9 @@ function renderContent() {
   const cursor = noteCursor();
   const actionFocus = paperActionCursor();
   drawContent();
+  document.querySelectorAll('form[data-form]').forEach(form => {
+    if (form.dataset.form !== NEW_CLAIM_ID) rememberClaimQuitBase(form.dataset.form, form);
+  });
   const recovery = ResearchTools.recoveryHtml();
   if (recovery) $('content').insertAdjacentHTML('afterbegin', recovery);
   renderActiveFilters();
@@ -1112,7 +1115,7 @@ $('panes').addEventListener('click', async (event) => {
       rows.lastElementChild.querySelector('[name="ledger-text"]').focus();
       return;
     }
-    if (act === 'drop-ledger') { button.closest('[data-ledger-row]').remove(); return; }
+    if (act === 'drop-ledger') { button.closest('[data-ledger-row]').remove(); captureResearchDraft(); writingAutosave('research').schedule(); return; }
     if (act === 'cancel-research') {
       V.error = null;
       showView('claims');
@@ -1125,6 +1128,7 @@ $('panes').addEventListener('click', async (event) => {
     if (act === 'drop-link') {
       button.closest('.linkrow').querySelector('[name="link-claim"]').value = '';
       button.closest('.linkrow').style.display = 'none';
+      captureOpenEditor(); writingAutosave('claim', claim).schedule();
       return;
     }
     if (act === 'review') {
@@ -1333,65 +1337,18 @@ $('panes').addEventListener('click', async (event) => {
     if (act === 'done-note') { await closeNoteEditor(); return; }
     if (act === 'cancel-synth') { cancelSynthEdit(); return; }
     if (act === 'save-synth') {
-      if (V.synthSaving) return;   // a save is in flight
-      const topic = button.dataset.topic;
+      const topic = button.dataset.topic, owner = V.drafts;
       const field = document.querySelector(`textarea[data-synth="${CSS.escape(topic)}"]`);
-      const text = field ? field.value : (V.synthDrafts[topic] || '');
-      V.error = null;
-      captureOpenEditor();
-      // A correction by hand is a judgment about the claims as they stand, and
-      // `set_synthesis_text` fingerprints the ones on file rather than the ones
-      // on screen. A claim waiting out its undo window is still on file, so the
-      // basis would record a claim the reader cannot see and the synthesis
-      // would go stale — with a deleted id in its basis — the moment the timer
-      // sent the delete. The held deletes go first, as they do before a
-      // rewrite, a retag or an export.
-      //
-      // The settle ends in a read and a redraw, so what was typed is parked
-      // first: the textarea is drawn from the draft, and the value in the DOM
-      // would otherwise be replaced by the text on file.
-      V.synthDrafts[topic] = text;
-      // Frozen from here rather than from the request: the settle is a wait
-      // like any other, and a second click during it would send the flush and
-      // the PATCH twice over.
-      V.synthSaving = topic;
-      const owner = workspaceClient.workspaceId;
-      let marker;
-      renderContent();
-      try {
-        const headers = await settleDeletes();
-        // The held delete failed. The claim is still on file, the reader has
-        // been told so, and a basis recorded against it would be a judgment
-        // about a corpus nobody can see.
-        if (!headers) return;
-        marker = beginManualQuitWrite('synthesis', topic);
-        await api(`/api/syntheses/${encodeURIComponent(topic)}`, {
-          method: 'PATCH', headers: { 'Content-Type': 'application/json', ...headers },
-          body: JSON.stringify({ text }),
-        });
-        if (workspaceClient.workspaceId === owner && V.unconfirmedSyntheses[topic] === marker) {
-          delete V.unconfirmedSyntheses[topic];
-          if (V.synthDrafts[topic] === text) {
-            if (V.synthEditing === topic) V.synthEditing = null;
-            delete V.synthDrafts[topic]; delete V.quitSynthBases[topic];
-          } else V.quitSynthBases[topic] = {text};
-        }
-      } catch (error) {
-        V.synthDrafts[topic] = text;   // keep what was typed so the save can be retried
-        V.error = `Could not save the synthesis: ${error.message}`;
-      } finally {
-        // In the `finally` so the editor is handed back on the way out of a
-        // settle that failed too: that path leaves without a request, and a
-        // redraw it did not run would leave the editor frozen with nothing
-        // left to unfreeze it.
-        V.synthSaving = null;
-        await refreshAllShowingError();
+      if (field) V.synthDrafts[topic] = field.value;
+      if (await writingAutosave('synthesis', topic).flush() && V.drafts === owner && V.synthEditing === topic) {
+        delete V.synthDrafts[topic]; V.synthEditing = null;
+        captureOpenEditor(); renderContent();
       }
       return;
     }
     if (act === 'del-synth') {
       const topic = button.dataset.topic;
-      if (V.synthSaving === topic) {
+      if (V.synthSaving === topic || writingInFlight('synthesis', topic)) {
         toast('Wait for the current change to finish, then delete the synthesis.', {tone:'warn'});
         return;
       }
@@ -1596,7 +1553,7 @@ $('panes').addEventListener('click', async (event) => {
 });
 
 $('panes').addEventListener('input', (e) => {
-  if (e.target.matches('textarea[data-synth]')) V.synthDrafts[e.target.dataset.synth] = e.target.value;
+  if (e.target.matches('textarea[data-synth]') && e.target.dataset.workspace === workspaceClient.workspaceId) V.synthDrafts[e.target.dataset.synth] = e.target.value;
   if (e.target.matches('textarea[data-note]')) {
     V.noteEditing = e.target.dataset.note;
     V.noteDrafts[V.noteEditing] = e.target.value;

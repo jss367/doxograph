@@ -56,7 +56,37 @@ const ResearchTools = (() => {
   // A highlight note being written in the rail is a draft until Save note. It
   // counts as unsaved once it differs from the note on file, so leaving the
   // page asks first, as it does for a board or a connection being edited.
-  const highlightDrafting = () => Boolean(markEditor) && markEditor.text !== markEditor.saved;
+  const highlightDrafting = () => Boolean(markEditor) && (markEditor.text !== markEditor.saved || markSavers.get(markEditor)?.unconfirmed);
+  const markSavers = new WeakMap();
+  function markAutosave() {
+    const draft = markEditor;
+    if (!draft) return null;
+    if (markSavers.has(draft)) return markSavers.get(draft);
+    let sent = draft.saved;
+    const saver = createAutosave({
+      current: () => markEditor === draft && draft.workspace === client.workspaceId ? draft : null,
+      dirty: () => draft.text !== draft.saved,
+      async write() {
+        const note = draft.text, previous = sent;
+        sent = note;
+        const saved = await mutateNotebook(draft.workspace, n => {
+          const h = n.highlights.find(h => h.id === draft.id && h.paper === draft.paper);
+          if (!h) throw new Error('This mark was removed. Your writing is kept.');
+          if (h.note !== draft.saved && h.note !== previous) throw new Error('This note changed in another window. Your writing is kept.');
+          h.note = note;
+        }, {refresh:false});
+        draft.saved = note;
+        if (draft.workspace === client.workspaceId) client.state.notebook = saved;
+      },
+      changed() {
+        const label = document.querySelector('[data-mark-save-status]');
+        if (label && markEditor === draft) { label.textContent = saver.describe(); label.className = saver.failure ? 'warn' : 'hint'; }
+      },
+    });
+    markSavers.set(draft, saver);
+    return saver;
+  }
+  async function flushMark() { return markAutosave() ? markAutosave().flush() : true; }
   const markEditorOn = paper => markEditor?.workspace === client.workspaceId && markEditor.paper === paper;
   const unsaved = () => dirty || editing() || connectionDraft || highlightDrafting();
   const refKey = r => JSON.stringify([r.paper, r.claim || r.id]);
@@ -1045,7 +1075,7 @@ const ResearchTools = (() => {
           <span class="swatches" role="group" aria-label="Color of this mark">${COLORS.map(c => button('recolor-highlight', '', `class="swatch highlight-${c}" data-color="${c}" aria-label="Color ${c}" aria-pressed="${c === h.color}" title="Color this mark ${c}"`)).join('')}</span>
           <label title="A question to come back to; it is listed under Marks and questions until answered"><input type="checkbox" data-highlight-question="${html(h.id)}" ${h.question ? 'checked' : ''}> Open question</label>
           <span class="cact">
-          ${editing ? button('save-highlight', 'Save note') + button('cancel-highlight', 'Cancel') : button('edit-highlight', h.note.trim() ? 'Edit note' : 'Add note')}
+          ${editing ? button('save-highlight', 'Done') + `<span role="status" data-mark-save-status>${html(markAutosave().describe())}</span>` : button('edit-highlight', h.note.trim() ? 'Edit note' : 'Add note')}
           ${figure ? '' : button('capture-highlight', 'Capture as claim')}${button('remove-highlight', 'Remove')}</span></div>
       </article>`;
     }).join('') : empty}</section>`;
@@ -1217,11 +1247,10 @@ const ResearchTools = (() => {
     if (name === 'edit-highlight') {
       // One note is written at a time; the one half-written is not dropped for
       // another without asking.
-      if (markEditor?.id !== id && highlightDrafting()
-        && !await confirmDialog('Discard the note you are writing on another highlight?', {ok:'Discard note'})) return;
+      if (markEditor?.id !== id && !await flushMark()) return;
       openMarkNote(highlight); return;
     }
-    if (name === 'cancel-highlight') { markEditor = null; redrawContent(); return; }
+    if (name === 'cancel-highlight') { if (await flushMark()) { markEditor = null; redrawContent(); } return; }
     if (name === 'recolor-highlight') {
       const color = COLORS.includes(data.color) ? data.color : 'yellow';
       storeColor(color);
@@ -1242,22 +1271,7 @@ const ResearchTools = (() => {
     if (name === 'save-highlight') {
       const draft = markEditor;
       if (!draft || draft.id !== id || draft.workspace !== client.workspaceId) return;
-      const note = draft.text;
-      target.disabled = true;
-      try {
-        await mutateNotebook(draft.workspace, n => {
-          const h = n.highlights.find(h => h.id === id && h.paper === draft.paper);
-          if (!h) throw new Error('This highlight was removed in another window.');
-          if (h.note !== draft.saved) throw new Error('This note changed in another window. Your draft is kept; copy it before reloading the saved note.');
-          h.note = note;
-        }, {refresh:false});
-        draft.saved = note;
-        // Only this exact editor may be completed by its save. New typing
-        // remains a draft against the version that actually reached disk.
-        if (markEditor === draft && draft.text === note) markEditor = null;
-        else if (markEditor === draft) toast('Saved the note as it was when you clicked Save. What you typed since is still in the editor.');
-        await refreshAll();
-      } finally { target.disabled = false; }
+      if (await flushMark() && markEditor === draft) { markEditor = null; await refreshAll(); redrawContent(); }
       return;
     }
     if (name === 'remove-highlight') {
@@ -1440,11 +1454,12 @@ const ResearchTools = (() => {
     const target = event.target;
     if (target.dataset.highlightNote) {
       if (markEditor?.id === target.dataset.highlightNote && markEditor.workspace === client.workspaceId) markEditor.text = target.value;
+      markAutosave()?.schedule();
       return;
     }
     if (!el('research-tools')?.contains(target)) return;
   });
-  window.addEventListener('beforeunload', event => { if (unsaved()) { event.preventDefault(); event.returnValue = ''; } });
+  window.addEventListener('beforeunload', event => { if (unsaved()) { void flushMark(); event.preventDefault(); event.returnValue = ''; } });
   // Everything a workspace switch would discard, to tell whether it changed
   // after the reader agreed to discard it.
   let discarding = null;
@@ -1452,6 +1467,7 @@ const ResearchTools = (() => {
     && [...document.querySelectorAll('#research-body [id^="connection-"]')].map(field => field.value),
     highlightDrafting() && [markEditor.id, markEditor.paper, markEditor.text]]);
   async function beforeWorkspaceSwitch() {
+    await flushMark();
     // A reader action waiting on the notebook would finish in the workspace
     // it started in and open its paper over the one switched to.
     if (busy) {
@@ -1491,7 +1507,7 @@ const ResearchTools = (() => {
     redrawContent();
   }
   return {selection: () => ({papers: selectedPapers(), focus: refs().map(r => ({paper: r.paper, claim: r.claim}))}),
-    historyChanged,
+    historyChanged, flush: flushMark,
     connect(value, {open: opening, selected}) { client = value; navigate = opening; select = selected; }, show, hide,
     resetWorkspace() {
       hide();

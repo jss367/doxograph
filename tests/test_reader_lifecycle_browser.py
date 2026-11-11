@@ -4,6 +4,7 @@ import io
 
 import httpx
 import pytest
+from playwright.async_api import expect
 from pypdf import PdfReader, PdfWriter
 
 from browser_support import browser_session, run_browser
@@ -181,14 +182,14 @@ def test_mark_editor_reconciles_clean_removal_and_conflicting_notes(engine, remo
                 assert httpx.put(url + '/api/notebook', json=notebook).status_code == 200
                 await _poll(page)
                 await page.locator('[data-highlight-note]').fill('My changed note')
-                await page.get_by_role('button', name='Save note', exact=True).click()
+                await page.get_by_role('button', name='Done', exact=True).click()
                 await ready(page)
                 assert await page.locator('[data-highlight-note]').input_value() == 'My changed note'
                 assert httpx.get(url + '/api/notebook').json()['highlights'][0]['note'] == 'Written in another window'
-                await page.locator('#toasts .toast', has_text='note changed in another window').wait_for()
-                await page.locator('.highlight-entry[data-highlight="mark"]').get_by_role(
-                    'button', name='Cancel', exact=True).click()
-                await ready(page)
+                await expect(page.locator('[data-mark-save-status]')).to_contain_text('note changed in another window')
+                # Explicitly reload to abandon the conflicting draft.
+                await page.reload()
+                await page.locator('#papers li[data-paper="paper"]').click()
                 await page.get_by_role('button', name='Edit note', exact=True).click()
                 # A clean editor closes without a recovery warning or phantom
                 # unsaved state when the mark is subsequently removed.

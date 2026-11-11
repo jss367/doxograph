@@ -248,12 +248,12 @@ function synthesisBlock(tag) {
     // the request keeps the editor frozen.
     const busy = V.synthSaving === tag ? ' disabled' : '';
     return `<div class="synth${busy ? ' saving' : ''}" data-topic="${esc(tag)}">
-      <textarea data-synth="${esc(tag)}"${busy}>${esc(text)}</textarea>
+      <textarea data-synth="${esc(tag)}" data-workspace="${esc(workspaceClient.workspaceId)}"${busy}>${esc(text)}</textarea>
       <div class="smeta">
         <span class="hint">Cite claims as [claim-id]; they become links.</span>
         <span class="cact" style="margin-left:auto">
-          <button type="button" data-act="save-synth" data-topic="${esc(tag)}" class="primary"${busy}>Save</button>
-          <button type="button" data-act="cancel-synth" data-topic="${esc(tag)}"${busy}>Cancel</button>
+          <button type="button" data-act="save-synth" data-topic="${esc(tag)}" class="primary"${busy}>Done</button>
+          ${writingStatus('synthesis', tag)}
         </span>
       </div>
     </div>`;
@@ -330,7 +330,10 @@ function parkSynthEditor() {
   V.synthEditing = null;
 }
 
-function cancelSynthEdit() {
+async function cancelSynthEdit() {
+  const topic = V.synthEditing, owner = V.drafts;
+  if (topic && !await writingAutosave('synthesis', topic).flush()) return;
+  if (V.synthEditing !== topic || V.drafts !== owner) return;
   if (V.synthSaving === V.synthEditing && V.synthSaving) return;
   if (V.synthEditing) {
     delete V.quitSynthBases[V.synthEditing];

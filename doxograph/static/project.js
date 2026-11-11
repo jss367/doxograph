@@ -18,7 +18,27 @@
     try { await fn(); } catch (e) { status(e.message, true); }
     finally { busy = false; document.querySelectorAll('button,input,select,textarea').forEach(el => el.disabled = false); }
   }
-  function changed() { dirty = true; status('Unsaved changes — click Save changes to keep your writing.'); }
+  let edits = 0;
+  const autosave = createAutosave({
+    current: () => current,
+    dirty: () => dirty,
+    blocked: () => !current.title.trim() || current.project.sections.some(s => !s.title.trim())
+      ? 'Give the project and every section a title.' : '',
+    async write(target) {
+      const generation = edits;
+      const saved = await api('/api/research-notes/' + target.id, json('PUT', {
+        title:target.title, body:target.body, project:target.project, revision:target.revision,
+      }));
+      if (current !== target) return;
+      // Keep the live object and editor intact: typing can continue in flight.
+      target.revision = saved.revision;
+      projects = projects.map(p => p.id === saved.id ? saved : p);
+      if (edits === generation) dirty = false;
+      options();
+    },
+    changed() { $('save-status').textContent = autosave.describe(); $('save-status').classList.toggle('error', Boolean(autosave.failure)); },
+  });
+  function changed() { edits++; dirty = true; autosave.schedule(); }
   function options() {
     $('projects').replaceChildren(new Option('Choose a diagram', ''));
     projects.forEach(p => $('projects').add(new Option(p.title, p.id)));
@@ -60,21 +80,26 @@
     $('content').hidden = !current;
     if (current) { $('title').value = current.title; $('diagram').src = imageURL(current.project.image); $('fields').hidden = true; paint(); }
     drawing = false; start = null; $('canvas').classList.remove('drawing'); $('draw').textContent = 'Draw a section';
-    options();
+    options(); $('save-status').textContent = autosave.describe();
   }
+  window.doxographSaveDrafts = async () => await autosave.flush() && !busy;
+  $('back').addEventListener('click', async event => { event.preventDefault(); if (await autosave.flush()) location.href = $('back').href; });
   async function upload(file) {
     const data = new FormData(); data.append('file', file);
     return (await api('/api/research-notes/images', {method:'POST', body:data})).url;
   }
   function json(method, body) { return {method, headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)}; }
   $('projects').onchange = () => {
-    if (dirty && !confirm('Discard unsaved changes to this diagram?')) { options(); return; }
-    open(projects.find(p => p.id === $('projects').value)); status('Click a section to write notes.');
+    const id = $('projects').value;
+    run(async () => {
+      if (!await autosave.flush()) { options(); return; }
+      open(projects.find(p => p.id === id)); status('Click a section to write notes.');
+    });
   };
   $('upload').onchange = () => {
     const file = $('upload').files[0]; if (!file) return;
-    if (dirty && !confirm('Discard unsaved changes to this diagram?')) return;
     run(async () => {
+      if (!await autosave.flush()) return;
       status('Uploading diagram…');
       const url = await upload(file);
       const project = await api('/api/research-notes', json('POST', {title:file.name.replace(/\.[^.]+$/, ''), body:'', project:{image:new URL(url, location.href).pathname.split('/').pop(), sections:[]}}));
@@ -84,17 +109,13 @@
   $('title').oninput = () => { current.title = $('title').value; changed(); };
   $('section-title').oninput = () => { current.project.sections[selected].title = $('section-title').value; changed(); paint(); };
   $('notes').oninput = () => { current.project.sections[selected].body = $('notes').value; changed(); preview(); paint(); };
-  $('save').onclick = () => run(async () => {
-    if (!current.title.trim() || current.project.sections.some(s => !s.title.trim())) throw new Error('Give the project and every section a title.');
-    const saved = await api('/api/research-notes/' + current.id, json('PUT', {title:current.title, body:current.body, project:current.project, revision:current.revision}));
-    current = saved; projects = projects.map(p => p.id === saved.id ? saved : p); dirty = false; options(); status('All changes saved.');
-  });
+  $('save').onclick = () => autosave.flush();
   $('detect').onclick = () => run(async () => {
-    if (current.project.sections.length && !confirm('Replace sections with new AI suggestions? Existing section notes will be removed only when you save.')) return;
+    if (current.project.sections.length && !confirm('Replace sections with new AI suggestions? Existing section notes will be removed and the replacement saved automatically.')) return;
     status('Reading the diagram and locating sections…');
     const result = await api('/api/project-overview/detect', json('POST', {image:current.project.image}));
     current.project.sections = result.sections; selected = -1; $('fields').hidden = true; paint(); changed();
-    status(`${result.sections.length} sections suggested. Review their boundaries and save, or draw any missing sections.`);
+    status(`${result.sections.length} sections suggested. Review their boundaries, or draw any missing sections. Changes save automatically.`);
   });
   $('draw').onclick = () => { drawing = !drawing; $('canvas').classList.toggle('drawing', drawing); $('draw').textContent = drawing ? 'Cancel drawing' : 'Draw a section'; };
   function point(event) { const r = $('canvas').getBoundingClientRect(); return {x:Math.max(0, Math.min(1,(event.clientX-r.left)/r.width)), y:Math.max(0,Math.min(1,(event.clientY-r.top)/r.height))}; }
@@ -108,6 +129,6 @@
   $('canvas').onpointercancel = () => { start = null; };
   $('remove').onclick = () => { if (!confirm('Remove this section and its notes?')) return; current.project.sections.splice(selected,1); edit(-1); changed(); };
   $('picture').onchange = () => { const file = $('picture').files[0]; if (!file || selected < 0) return; run(async () => { const url = await upload(file); const s = current.project.sections[selected]; s.body += `\n\n![Picture](${url})\n`; $('notes').value = s.body; changed(); preview(); paint(); }); $('picture').value = ''; };
-  window.addEventListener('beforeunload', e => { if (dirty || busy) { e.preventDefault(); e.returnValue = ''; } });
+  window.addEventListener('beforeunload', e => { if (dirty || busy || autosave.saving || autosave.unconfirmed) { void autosave.flush(); e.preventDefault(); e.returnValue = ''; } });
   run(async () => { const [data,state] = await Promise.all([api('/api/research-notes'), api('/api/state')]); projects = data.notes.filter(n => n.project); $('workspace').textContent = state.workspace.name; options(); if (projects.length) open(projects[0]); });
 })();
