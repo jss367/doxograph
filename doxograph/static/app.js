@@ -1340,7 +1340,7 @@ $('panes').addEventListener('click', async (event) => {
       const topic = button.dataset.topic, owner = V.drafts;
       const field = document.querySelector(`textarea[data-synth="${CSS.escape(topic)}"]`);
       if (field) V.synthDrafts[topic] = field.value;
-      if (await writingAutosave('synthesis', topic).flush() && V.drafts === owner && V.synthEditing === topic) {
+      if (await finishWriting('synthesis', topic, () => V.synthEditing === topic) && V.drafts === owner && V.synthEditing === topic) {
         delete V.synthDrafts[topic]; V.synthEditing = null;
         captureOpenEditor(); renderContent();
       }

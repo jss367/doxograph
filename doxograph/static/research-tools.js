@@ -80,7 +80,11 @@ const ResearchTools = (() => {
       },
       changed() {
         const label = document.querySelector('[data-mark-save-status]');
-        if (label && markEditor === draft) { label.textContent = saver.describe(); label.className = saver.failure ? 'warn' : 'hint'; }
+        if (label && markEditor === draft) {
+          label.textContent = saver.describe(); label.className = saver.failure ? 'warn' : 'hint';
+          const discard = label.parentElement.querySelector('[data-tool="discard-highlight"]');
+          if (discard) discard.hidden = !saver.failure;
+        }
       },
     });
     markSavers.set(draft, saver);
@@ -1075,7 +1079,7 @@ const ResearchTools = (() => {
           <span class="swatches" role="group" aria-label="Color of this mark">${COLORS.map(c => button('recolor-highlight', '', `class="swatch highlight-${c}" data-color="${c}" aria-label="Color ${c}" aria-pressed="${c === h.color}" title="Color this mark ${c}"`)).join('')}</span>
           <label title="A question to come back to; it is listed under Marks and questions until answered"><input type="checkbox" data-highlight-question="${html(h.id)}" ${h.question ? 'checked' : ''}> Open question</label>
           <span class="cact">
-          ${editing ? button('save-highlight', 'Done') + `<span role="status" data-mark-save-status>${html(markAutosave().describe())}</span>` : button('edit-highlight', h.note.trim() ? 'Edit note' : 'Add note')}
+          ${editing ? button('save-highlight', 'Done') + button('discard-highlight', 'Discard note', markAutosave().failure ? '' : 'hidden') + `<span role="status" data-mark-save-status>${html(markAutosave().describe())}</span>` : button('edit-highlight', h.note.trim() ? 'Edit note' : 'Add note')}
           ${figure ? '' : button('capture-highlight', 'Capture as claim')}${button('remove-highlight', 'Remove')}</span></div>
       </article>`;
     }).join('') : empty}</section>`;
@@ -1130,7 +1134,7 @@ const ResearchTools = (() => {
     scrollToSelected({reveal: Boolean(claim)});
   }
   const READER_TOOLS = new Set(['previous-page', 'next-page', 'go-page', 'bookmark', 'reader', 'highlight-selection', 'recolor-highlight',
-    'highlight-page', 'show-highlight-note', 'edit-highlight', 'save-highlight', 'cancel-highlight', 'capture-highlight', 'remove-highlight', 'figure-mode', 'export-annotated', 'copy-removed-note', 'discard-removed-note', 'retry-reader']);
+    'highlight-page', 'show-highlight-note', 'edit-highlight', 'save-highlight', 'cancel-highlight', 'discard-highlight', 'capture-highlight', 'remove-highlight', 'figure-mode', 'export-annotated', 'copy-removed-note', 'discard-removed-note', 'retry-reader']);
   async function readerAction(name, target) {
     const data = target.dataset;
     if (name === 'retry-reader') {
@@ -1249,6 +1253,17 @@ const ResearchTools = (() => {
       // another without asking.
       if (markEditor?.id !== id && !await flushMark()) return;
       openMarkNote(highlight); return;
+    }
+    if (name === 'discard-highlight') {
+      const draft = markEditor, saver = markAutosave();
+      if (!draft || draft.id !== id || !saver?.failure) return;
+      await saver.settle();
+      const generation = saver.generation;
+      if (await confirmDialog('Discard unsaved changes to this note?', {ok:'Discard note'})
+        && markEditor === draft && draft.workspace === client.workspaceId && saver.generation === generation) {
+        markEditor = null; redrawContent();
+      } else saver.resume();
+      return;
     }
     if (name === 'cancel-highlight') { if (await flushMark()) { markEditor = null; redrawContent(); } return; }
     if (name === 'recolor-highlight') {

@@ -267,6 +267,7 @@ def test_focused_review_drafts_failed_save_missing_pdf_and_workspace(engine):
                 await page.route(endpoint, reject)
                 await dialog.get_by_label('Claim', exact=True).fill('Keep this unsaved draft. Retry')
                 await dialog.get_by_role('button', name='Done', exact=True).click()
+                await page.locator('#ask-cancel').click()
                 await expect(dialog.locator('[data-writing-status=claim]')).to_contain_text('Temporary storage failure')
                 await expect(dialog.get_by_label('Claim', exact=True)).to_have_value('Keep this unsaved draft. Retry')
                 await expect(dialog.get_by_role('button', name='Done', exact=True)).to_be_enabled()

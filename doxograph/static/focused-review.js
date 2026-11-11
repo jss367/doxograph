@@ -327,7 +327,8 @@ window.FocusedReview = (() => {
     else if (name === 'edit') { editing = true; render(); body.querySelector('textarea[name="text"]').focus(); }
     else if (name === 'cancel') {
       parkDraft();
-      if (!await writingAutosave('claim', current).flush()) return;
+      const id = current;
+      if (!await finishWriting('claim', id, () => current === id && dialog.open && editing)) return;
       retireManualQuitState('claim', current, manualQuitState('claim', current)); editing = false; render();
     }
     else if (name === 'review' && !editing) {
@@ -354,7 +355,7 @@ window.FocusedReview = (() => {
     if (editing && event.target.matches('form[data-form]')) {
       parkDraft();
       const id = current, owner = V.drafts;
-      if (await writingAutosave('claim', id).flush() && current === id && V.drafts === owner && dialog.open) {
+      if (await finishWriting('claim', id, () => current === id && dialog.open && editing) && current === id && V.drafts === owner && dialog.open) {
         delete V.drafts[id]; editing = false; render();
       }
     }

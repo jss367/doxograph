@@ -332,7 +332,7 @@ function parkSynthEditor() {
 
 async function cancelSynthEdit() {
   const topic = V.synthEditing, owner = V.drafts;
-  if (topic && !await writingAutosave('synthesis', topic).flush()) return;
+  if (topic && !await finishWriting('synthesis', topic, () => V.synthEditing === topic)) return;
   if (V.synthEditing !== topic || V.drafts !== owner) return;
   if (V.synthSaving === V.synthEditing && V.synthSaving) return;
   if (V.synthEditing) {

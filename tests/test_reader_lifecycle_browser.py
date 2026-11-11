@@ -10,7 +10,7 @@ from pypdf import PdfReader, PdfWriter
 from browser_support import browser_session, run_browser
 from doxograph import config, store
 from pdfs import minimal_pdf
-from test_browser import _poll, _server
+from test_browser import _answer, _poll, _server
 from test_research_tools_browser import ready
 
 
@@ -187,9 +187,16 @@ def test_mark_editor_reconciles_clean_removal_and_conflicting_notes(engine, remo
                 assert await page.locator('[data-highlight-note]').input_value() == 'My changed note'
                 assert httpx.get(url + '/api/notebook').json()['highlights'][0]['note'] == 'Written in another window'
                 await expect(page.locator('[data-mark-save-status]')).to_contain_text('note changed in another window')
-                # Explicitly reload to abandon the conflicting draft.
-                await page.reload()
-                await page.locator('#papers li[data-paper="paper"]').click()
+                # Declining discard keeps the conflict recoverable; accepting
+                # closes it without reloading or retrying the conflicting write.
+                await page.get_by_role('button', name='Discard note', exact=True).click()
+                await _answer(page, 'Cancel')
+                await expect(page.locator('[data-highlight-note]')).to_have_value('My changed note')
+                await page.get_by_role('button', name='Discard note', exact=True).click()
+                await _answer(page, 'Discard note')
+                await expect(page.locator('[data-highlight-note]')).to_have_count(0)
+                assert await page.evaluate('window.doxographSaveDrafts()') is True
+                assert httpx.get(url + '/api/notebook').json()['highlights'][0]['note'] == 'Written in another window'
                 await page.get_by_role('button', name='Edit note', exact=True).click()
                 # A clean editor closes without a recovery warning or phantom
                 # unsaved state when the mark is subsequently removed.

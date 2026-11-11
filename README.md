@@ -491,7 +491,9 @@ controls let you check the surrounding material. Papers without a PDF can
 still be reviewed. Use **Mark reviewed & next**, **Edit claim**, or the same
 `j`, `k`, `r`, `e`, and `n` shortcuts; `Escape` exits. Edits save automatically,
 including when moving between claims or exiting review. **Done** saves immediately
-and closes the editor. Failed saves keep your writing available to retry. Quote matching and PDF viewing run locally
+and closes the editor. Failed saves keep your writing available to retry; Done
+offers **Discard changes** if a save still fails. Failed mark-note saves show
+**Discard note**, which asks before dropping the unsaved text. Quote matching and PDF viewing run locally
 and work with AI analysis disabled.
 
 The divider between the lists and the claims can be dragged, so a session spent

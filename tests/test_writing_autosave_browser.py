@@ -8,6 +8,7 @@ from browser_support import browser_session, run_browser, inert_tools as inert_t
 from test_ask_browser import _server
 from test_core_workspace_boundary_browser import editor, seed
 from test_quit_manual_editors_browser import stored
+from test_browser import _answer
 
 
 @pytest.mark.browser
@@ -89,3 +90,60 @@ def test_workspace_switch_flushes_then_retires_writing_timers(engine, kind):
                 assert await page.evaluate('window.doxographSaveDrafts()') is True, await page.evaluate('({drafts:V.drafts, synth:V.synthDrafts, research:V.researchDraft, edit:V.editing, writing:hasQuitWriting(), pending:workspaceClient.pendingMutations, entries:[...writingAutosaves.values()].map(e=>({active:e.owner===V.drafts,saving:e.saver.saving,unconfirmed:e.saver.unconfirmed,failure:e.saver.failure}))})')
                 assert stored(url, kind, identity) == 'Save before switching'
     run_browser(asyncio.wait_for(scenario(), 25))
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+@pytest.mark.parametrize('kind', ['claim', 'synthesis', 'research', 'focused-claim'])
+def test_failed_done_can_be_cancelled_then_discarded(engine, kind):
+    """Discard closes a failed editor, retires retries, and preserves saved data."""
+    _, claims, _ = seed()
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={'width': 1440, 'height': 1000})
+            with _server() as url:
+                await page.goto(url + '/#view=claims')
+                if kind == 'focused-claim':
+                    await page.locator('#btn-focus-review').click()
+                    await page.locator('[data-focus="edit"]').click()
+                    field = page.locator('#focused-review textarea[name="text"]')
+                    identity = await page.locator('#focused-review form[data-form]').get_attribute('data-form')
+                    done = page.locator('#focused-review button[type="submit"]')
+                else:
+                    field, identity = await editor(page, kind, claims)
+                    selector = f'form[data-form="{identity}"] button[type="submit"]' if kind == 'claim' else '[data-act="save-synth"]' if kind == 'synthesis' else '#research-form button[type="submit"]'
+                    done = page.locator(selector).first
+                saved_kind = 'claim' if kind == 'focused-claim' else kind
+                original = stored(url, saved_kind, identity)
+                path = f'/api/papers/study/claims/{identity}' if saved_kind == 'claim' else '/api/syntheses/recovery' if kind == 'synthesis' else '/api/context'
+                requests = []
+
+                async def reject(route):
+                    requests.append(route.request.method)
+                    await route.fulfill(status=400, json={'detail': 'Synthetic validation failure'})
+
+                await page.route('**' + path, reject)
+                await field.fill('Unsavable writing')
+                await done.click()
+                await _answer(page, 'Cancel')
+                await expect(field).to_have_value('Unsavable writing')
+                await done.click()
+                await _answer(page, 'Discard changes')
+                await expect(field).to_have_count(0)
+                count = len(requests)
+                assert await page.evaluate('window.doxographSaveDrafts()') is True
+                await page.wait_for_timeout(700)
+                assert len(requests) == count
+                assert stored(url, saved_kind, identity) == original
+                assert await page.evaluate('([kind, id]) => kind === "claim" ? !V.drafts[id] && !V.quitClaimBases[id] && !V.unconfirmedClaims[id] : kind === "synthesis" ? !V.synthDrafts[id] && !V.quitSynthBases[id] && !V.unconfirmedSyntheses[id] : V.researchDraft === null', [saved_kind, identity])
+                await page.unroute('**' + path, reject)
+                if kind == 'focused-claim':
+                    await page.locator('[data-focus="edit"]').click()
+                else:
+                    field, _ = await editor(page, kind, claims)
+                await expect(field).to_have_value(original)
+                await field.fill('Valid writing after discard')
+                assert await page.evaluate('window.doxographSaveDrafts()') is True
+                assert stored(url, saved_kind, identity) == 'Valid writing after discard'
+    run_browser(asyncio.wait_for(scenario(), 30))

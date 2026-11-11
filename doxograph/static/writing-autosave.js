@@ -20,7 +20,8 @@ function writingAutosave(kind, id = '') {
   };
   const uncertain = new Set();
   const saver = createAutosave({
-    current: () => V.drafts === owner && workspaceClient.workspaceId === workspace ? session : null,
+    current: () => V.drafts === owner && workspaceClient.workspaceId === workspace
+      && writingAutosaves.get(key)?.saver === saver ? session : null,
     dirty: () => V.drafts === owner && dirty(),
     blocked: () => {
       if (kind === 'claim') {
@@ -95,6 +96,33 @@ function writingAutosave(kind, id = '') {
   });
   writingAutosaves.set(key, {owner, saver});
   return saver;
+}
+/** Finish an editor, asking before abandoning a failed save and its retry state. */
+async function finishWriting(kind, id, current) {
+  const owner = V.drafts, workspace = workspaceClient.workspaceId;
+  const key = JSON.stringify([workspace, kind, id]);
+  const saver = writingAutosave(kind, id);
+  const active = () => V.drafts === owner && workspaceClient.workspaceId === workspace
+    && writingAutosaves.get(key)?.saver === saver && current();
+  if (await saver.flush()) return active() ? 'saved' : false;
+  if (!active()) return false;
+  await saver.settle();
+  const generation = saver.generation;
+  const discard = await confirmDialog('This writing could not be saved. Discard unsaved changes?', {
+    note: saver.failure, ok: 'Discard changes',
+  });
+  if (!discard || !active() || saver.generation !== generation) { saver.resume(); return false; }
+  // Retire the saver as well as the draft: a failed request can otherwise
+  // leave an unconfirmed write that a later quit or reopened editor retries.
+  writingAutosaves.delete(key);
+  if (kind === 'claim') {
+    delete V.drafts[id]; delete V.quitClaimBases[id]; delete V.unconfirmedClaims[id];
+  } else if (kind === 'synthesis') {
+    delete V.synthDrafts[id]; delete V.quitSynthBases[id]; delete V.unconfirmedSyntheses[id];
+  } else {
+    V.researchDraft = null; V.researchBase = storedResearch();
+  }
+  return 'discarded';
 }
 function writingStatus(kind, id = '') {
   const saver = writingAutosave(kind, id);

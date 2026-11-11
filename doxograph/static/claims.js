@@ -366,7 +366,7 @@ async function cancelEdit() {
   const id = V.editing, owner = V.drafts;
   if (V.editing && V.editing !== NEW_CLAIM_ID) {
     captureOpenEditor();
-    if (!await writingAutosave('claim', V.editing).flush()) return;
+    if (!await finishWriting('claim', id, () => V.editing === id)) return;
   }
   if (V.editing !== id || V.drafts !== owner || isSaving(id)) return;
   if (V.editing) {
@@ -760,7 +760,7 @@ $('panes').addEventListener('submit', async (event) => {
   if (wrap.dataset.claim !== NEW_CLAIM_ID) {
     const id = wrap.dataset.claim, owner = V.drafts;
     V.drafts[id] = readForm(form);
-    if (await writingAutosave('claim', id).flush() && V.drafts === owner && V.editing === id) {
+    if (await finishWriting('claim', id, () => V.editing === id) && V.drafts === owner && V.editing === id) {
       delete V.drafts[id]; V.editing = null; renderContent();
     }
     return;

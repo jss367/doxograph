@@ -184,7 +184,13 @@ function setResearchSaving(form, busy) {
 async function saveResearch() {
   const form = $('research-form'), owner = V.drafts;
   captureResearchDraft();
-  if (await writingAutosave('research').flush() && V.drafts === owner && $('research-form') === form) { showView('claims'); syncHash(true); }
+  const result = await finishWriting('research', '', () => $('research-form') === form && !V.researchSaving);
+  if (result && V.drafts === owner && $('research-form') === form) {
+    // Navigation captures an open form; remove the explicitly discarded DOM
+    // first so it cannot recreate the draft we just retired.
+    if (result === 'discarded') form.remove();
+    showView('claims'); syncHash(true); renderContent();
+  }
 }
 
 $('panes').addEventListener('submit', async (event) => {
