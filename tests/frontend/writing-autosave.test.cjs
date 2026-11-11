@@ -13,7 +13,7 @@ function editor(kind) {
       synthDrafts:{topic:'Draft synthesis'}, quitSynthBases:{topic:{text:'Saved synthesis'}}, unconfirmedSyntheses:{},
       researchDraft:{context:'Draft research', claims:[]}, researchBase:initial},
     S: {claims:[{id:'claim',paper:'paper'}]},
-    workspaceClient:{workspaceId:'default'},
+    workspaceClient:{workspaceId:'default', pullSequence:0, appliedPullSequence:0},
     document:{addEventListener() {}, querySelectorAll() { return []; }},
     window:{addEventListener() {}},
     isRemoving: () => false, trash:new Set(), savingClaims:new Set(),
@@ -191,6 +191,14 @@ for (const change of ['pull', 'newer-draft', 'removed', 'workspace', 'owner']) {
     oldRow.text = 'Saved claim';
     let acknowledge;
     context.api = () => new Promise(resolve => { acknowledge = resolve; });
+    let invalidated = false;
+    context.workspaceClient.invalidateState = () => { invalidated = true; };
+    context.pull = async () => {
+      assert.equal(invalidated, true);
+      context.workspaceClient.appliedPullSequence = ++context.workspaceClient.pullSequence;
+      // The authoritative read, not the delayed PATCH response, replaces S.
+      context.S = {claims:change === 'removed' ? [] : [{...oldRow, text:'Draft claim'}]};
+    };
     const saving = saver.flush();
     const currentRow = {...oldRow};
     context.S = {claims:change === 'removed' ? [] : [currentRow]};
@@ -201,7 +209,9 @@ for (const change of ['pull', 'newer-draft', 'removed', 'workspace', 'owner']) {
     assert.equal(await saving, !['workspace', 'owner'].includes(change));
     assert.equal(oldRow.text, 'Saved claim');
     if (['pull', 'newer-draft'].includes(change)) {
-      assert.equal(currentRow.text, 'Draft claim');
+      assert.equal(currentRow.text, 'Saved claim');
+      assert.equal(context.S.claims[0].text, 'Draft claim');
+      assert.equal(invalidated, true);
       assert.equal(context.V.quitClaimBases[id].text, 'Draft claim');
       assert.equal(context.V.drafts[id]?.text, change === 'newer-draft' ? 'Newer writing' : undefined);
     } else if (change === 'removed') {
@@ -211,5 +221,46 @@ for (const change of ['pull', 'newer-draft', 'removed', 'workspace', 'owner']) {
       assert.equal(context.V.quitClaimBases[id].text, 'Saved claim');
       assert.equal(context.V.drafts[id].text, change === 'owner' ? 'Other session' : 'Draft claim');
     }
+  });
+}
+
+
+for (const result of ['newer-pull', 'read-failure', 'superseding-failure', 'superseding-success', 'older-read-only', 'workspace-change', 'same-row']) {
+  test(`delayed claim acknowledgment respects ${result}`, async () => {
+    const {context, saver, id} = editor('claim');
+    const oldRow = context.S.claims[0];
+    let acknowledge, reads = 0, invalidated = false;
+    context.workspaceClient.pullSequence = 2;
+    context.workspaceClient.appliedPullSequence = 1;
+    context.api = () => new Promise(resolve => { acknowledge = resolve; });
+    context.workspaceClient.invalidateState = () => { invalidated = true; };
+    context.pull = async () => {
+      reads++;
+      assert.equal(invalidated, true);
+      if (result === 'read-failure') throw Error('Could not refresh');
+      if (result === 'superseding-failure') return false;
+      if (result === 'older-read-only') {
+        context.S = {claims:[{...oldRow, text:'Newer remote writing', note:'Newer remote note'}]};
+        context.workspaceClient.appliedPullSequence = 2;
+        return false;
+      }
+      context.workspaceClient.appliedPullSequence = result === 'superseding-success' ? 4 : 3;
+      if (result === 'workspace-change') {
+        context.workspaceClient.workspaceId = 'other';
+        context.V.drafts = {[id]:{text:'Other workspace draft'}};
+      }
+      context.S = {claims:[{...oldRow, text:'Newer remote writing', note:'Newer remote note'}]};
+      return result === 'superseding-success' ? false : true;
+    };
+    const saving = saver.flush();
+    if (result !== 'same-row') context.S = {claims:[{...oldRow, text:'Newer remote writing', note:'Newer remote note'}]};
+    acknowledge({...oldRow, text:'Draft claim', note:'Older response note'});
+    assert.equal(await saving, ['newer-pull', 'superseding-success', 'same-row'].includes(result));
+    assert.equal(reads, result === 'same-row' ? 0 : 1);
+    assert.equal(context.S.claims[0].text, result === 'same-row' ? 'Draft claim' : 'Newer remote writing');
+    assert.equal(context.S.claims[0].note, result === 'same-row' ? 'Older response note' : 'Newer remote note');
+    if (['read-failure', 'superseding-failure', 'older-read-only'].includes(result)) assert.equal(context.V.drafts[id].text, 'Draft claim');
+    if (result === 'workspace-change') assert.equal(context.V.drafts[id].text, 'Other workspace draft');
+    if (['newer-pull', 'superseding-success'].includes(result)) assert.equal(context.V.drafts[id], undefined);
   });
 }

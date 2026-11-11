@@ -337,7 +337,8 @@ def test_confirmed_deletion_retires_uncertain_autosave(engine, kind):
 
 @pytest.mark.browser
 @pytest.mark.parametrize('engine', ['chromium', 'webkit'])
-def test_claim_autosave_acknowledges_row_replaced_by_pull(engine):
+@pytest.mark.parametrize('newer_remote_edit', [False, True])
+def test_claim_autosave_acknowledges_row_replaced_by_pull(engine, newer_remote_edit):
     """A completed save must appear when Done closes and the claim is reopened."""
     _, claims, _ = seed()
     identity = claims[0]
@@ -353,14 +354,23 @@ def test_claim_autosave_acknowledges_row_replaced_by_pull(engine):
 
                 async def hold_save(route):
                     if route.request.method == 'PATCH' and not started.is_set():
+                        # Exercise both orderings: a pull before the write, and
+                        # a newer remote edit before its old response arrives.
+                        response = await route.fetch() if newer_remote_edit else None
                         started.set()
                         await release.wait()
+                        if response is not None:
+                            await route.fulfill(response=response)
+                            return
                     await route.continue_()
 
                 await page.route('**' + path, hold_save)
                 await field.fill('Acknowledged after a concurrent pull')
                 try:
                     await asyncio.wait_for(started.wait(), 5)
+                    expected = 'Newer remote writing' if newer_remote_edit else 'Acknowledged after a concurrent pull'
+                    if newer_remote_edit:
+                        assert httpx.patch(url + path, json={'text': expected, 'note': 'Newer remote note'}).status_code == 200
                     await page.evaluate('id => { window.beforeSavePull = S.claims.find(row => row.id === id); workspaceClient.invalidateState(); }', identity)
                     await page.evaluate('refresh()')
                     assert await page.evaluate('id => S.claims.find(row => row.id === id) !== window.beforeSavePull', identity)
@@ -370,8 +380,10 @@ def test_claim_autosave_acknowledges_row_replaced_by_pull(engine):
                     await form.get_by_role('button', name='Done', exact=True).click()
                     await expect(form).to_have_count(0)
                     field, _ = await editor(page, 'claim', claims)
-                    await expect(field).to_have_value('Acknowledged after a concurrent pull')
-                    assert stored(url, 'claim', identity) == 'Acknowledged after a concurrent pull'
+                    await expect(field).to_have_value(expected)
+                    assert stored(url, 'claim', identity) == expected
+                    if newer_remote_edit:
+                        await expect(page.locator(f'form[data-form="{identity}"] textarea[name="note"]')).to_have_value('Newer remote note')
                 finally:
                     release.set()
     run_browser(asyncio.wait_for(scenario(), 25))

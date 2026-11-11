@@ -10,7 +10,7 @@ function createWorkspaceClient({ workspaceId = 'default', fetch: send = globalTh
   let state = emptyState(), workspaces = [], etag = null, epoch = 0;
   // `pullsInFlight` counts reads not yet answered, from the poller or from a
   // refresh after an action alike, for anything that must wait them out.
-  let pendingMutations = 0, pullsAsked = 0, pullSettled = 0, pullsInFlight = 0;
+  let pendingMutations = 0, pullsAsked = 0, pullSettled = 0, pullApplied = 0, pullsInFlight = 0;
 
   function retryAfterDelay(header) {
     const value = header?.trim();
@@ -134,6 +134,7 @@ function createWorkspaceClient({ workspaceId = 'default', fetch: send = globalTh
         registryChanged = true;
       }
     } else { state.jobs = jobs.jobs || []; state.job_recovery_issues = jobs.recovery_issues || []; }
+    pullApplied = asked;
     return { applied: true, changed: Boolean(next), registryChanged };
   }
 
@@ -144,6 +145,9 @@ function createWorkspaceClient({ workspaceId = 'default', fetch: send = globalTh
     get workspaces() { return workspaces; },
     get pendingMutations() { return pendingMutations; },
     get pullsInFlight() { return pullsInFlight; },
+    // Settled failures must not count as evidence of a successful refresh.
+    get pullSequence() { return pullsAsked; },
+    get appliedPullSequence() { return pullApplied; },
     request, response, pull, select, loadWorkspaces, currentWorkspace,
     setWorkspaces(value) { workspaces = value; },
     invalidateState() { etag = null; },

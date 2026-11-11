@@ -49,10 +49,22 @@ function writingAutosave(kind, id = '') {
           method:'PATCH', headers, body:JSON.stringify(claimRequestBody(value)),
         });
         if (V.drafts !== owner || workspaceClient.workspaceId !== workspace) return;
-        // A pull may replace the corpus while the PATCH is in flight. Update
-        // its current row, not the detached snapshot used to address the write.
         const currentRow = S.claims.find(item => item.id === id && item.paper === row.paper);
-        if (currentRow) Object.assign(currentRow, saved);
+        if (currentRow === row) Object.assign(currentRow, saved);
+        else {
+          // A replacement may predate this write or contain a newer edit.
+          // The PATCH response cannot order those snapshots, so reread instead
+          // of overwriting a newer corpus under its still-current ETag.
+          const beforeRead = workspaceClient.pullSequence;
+          workspaceClient.invalidateState();
+          await pull();
+          if (V.drafts !== owner || workspaceClient.workspaceId !== workspace) return;
+          // A newer failed read can supersede this read without applying it.
+          // Accept only this read or a successful read requested after it.
+          if (workspaceClient.appliedPullSequence <= beforeRead) {
+            throw new Error('Could not refresh the saved claim. Your writing is kept.');
+          }
+        }
         state.quitClaimBases[id] = value;
         if (state.unconfirmedClaims[id] === marker) delete state.unconfirmedClaims[id];
         if (JSON.stringify(draft()) === JSON.stringify(value)) delete state.drafts[id];
