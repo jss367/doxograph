@@ -48,8 +48,11 @@ function writingAutosave(kind, id = '') {
         const saved = await api(`/api/papers/${encodeURIComponent(row.paper)}/claims/${encodeURIComponent(id)}`, {
           method:'PATCH', headers, body:JSON.stringify(claimRequestBody(value)),
         });
-        if (V.drafts !== owner) return;
-        Object.assign(row, saved);
+        if (V.drafts !== owner || workspaceClient.workspaceId !== workspace) return;
+        // A pull may replace the corpus while the PATCH is in flight. Update
+        // its current row, not the detached snapshot used to address the write.
+        const currentRow = S.claims.find(item => item.id === id && item.paper === row.paper);
+        if (currentRow) Object.assign(currentRow, saved);
         state.quitClaimBases[id] = value;
         if (state.unconfirmedClaims[id] === marker) delete state.unconfirmedClaims[id];
         if (JSON.stringify(draft()) === JSON.stringify(value)) delete state.drafts[id];

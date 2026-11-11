@@ -182,3 +182,34 @@ for (const kind of ['claim','synthesis']) {
     });
   }
 }
+
+
+for (const change of ['pull', 'newer-draft', 'removed', 'workspace', 'owner']) {
+  test(`claim acknowledgment reconciles the current corpus after ${change}`, async () => {
+    const {context, saver, id} = editor('claim');
+    const oldRow = context.S.claims[0];
+    oldRow.text = 'Saved claim';
+    let acknowledge;
+    context.api = () => new Promise(resolve => { acknowledge = resolve; });
+    const saving = saver.flush();
+    const currentRow = {...oldRow};
+    context.S = {claims:change === 'removed' ? [] : [currentRow]};
+    if (change === 'newer-draft') context.V.drafts[id] = {text:'Newer writing'};
+    if (change === 'workspace') context.workspaceClient.workspaceId = 'other';
+    if (change === 'owner') context.V.drafts = {[id]:{text:'Other session'}};
+    acknowledge({...oldRow, text:'Draft claim'});
+    assert.equal(await saving, !['workspace', 'owner'].includes(change));
+    assert.equal(oldRow.text, 'Saved claim');
+    if (['pull', 'newer-draft'].includes(change)) {
+      assert.equal(currentRow.text, 'Draft claim');
+      assert.equal(context.V.quitClaimBases[id].text, 'Draft claim');
+      assert.equal(context.V.drafts[id]?.text, change === 'newer-draft' ? 'Newer writing' : undefined);
+    } else if (change === 'removed') {
+      assert.equal(context.S.claims.length, 0); // Never resurrect a removed row.
+    } else {
+      assert.equal(currentRow.text, 'Saved claim');
+      assert.equal(context.V.quitClaimBases[id].text, 'Saved claim');
+      assert.equal(context.V.drafts[id].text, change === 'owner' ? 'Other session' : 'Draft claim');
+    }
+  });
+}
