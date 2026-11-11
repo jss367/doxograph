@@ -157,7 +157,9 @@ def test_continue_review_clears_filters_and_handles_missing_sources(engine):
                 await card.get_by_role('button', name='Next unreviewed claim').click()
                 await page.locator('#btn-workspace').click()
                 await expect(page.locator('#research-form [name="context"]')).to_have_value('A question to keep.')
-                await page.locator('#content [data-act="cancel-research"]').click()
+                await page.locator('#research-form').get_by_role('button', name='Done', exact=True).click()
+                await expect(page.locator('#research-form')).to_have_count(0)
+                assert store.load_context() == 'A question to keep.'
                 # Restore the first cursor so the reload can check the next one.
                 await page.locator(f'.claim[data-claim="{claims[0]["id"]}"] .ctext').click()
                 await page.goto(url)

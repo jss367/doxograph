@@ -49,6 +49,13 @@ async def remove_and_wait(page, url, removed):
     await page.locator('#toasts .toast', has_text='Deleted the claim.').wait_for()
 
 
+async def refuse_writing(route):
+    if route.request.method == 'PATCH':
+        await route.fulfill(status=503, json={'detail':'Synthetic unsaved writing'})
+    else:
+        await route.fallback()
+
+
 @pytest.mark.browser
 @pytest.mark.parametrize('engine', ['chromium', 'webkit'])
 @pytest.mark.parametrize('kind', ['claim', 'synthesis', 'paper-note', 'research'])
@@ -114,6 +121,7 @@ def test_unchanged_approved_core_draft_does_not_ask_twice(engine):
             await page.route(f'**/api/papers/study/claims/{removed}', hold)
             with _server() as url:
                 await remove_and_wait(page, url, removed)
+                await page.route('**/api/papers/study/claims/'+claims[0], refuse_writing)
                 field, _ = await editor(page, 'claim', claims)
                 await field.fill('Approved existing writing')
                 await page.evaluate('id => { window.switching = switchWorkspace(id); }', destination)
@@ -148,26 +156,25 @@ def test_same_content_replacement_core_identity_needs_new_consent(engine, kind):
 
             await page.route(f'**/api/papers/study/claims/{removed}', hold)
             with _server() as url:
-                await remove_and_wait(page, url, removed)
-                if kind == 'paper-note':
-                    async def refuse(route):
-                        if route.request.method == 'PATCH':
-                            await route.fulfill(status=503, json={'detail':'Synthetic unsaved note'})
-                        else:
-                            await route.continue_()
-                    await page.route('**/api/papers/*', refuse)
+                await page.goto(url+'/#view=claims')
+                await page.route('**/api/**', refuse_writing)
                 field, _ = await editor(page, kind, claims)
                 await field.fill('Identical writing')
                 await page.evaluate('id => { window.switching = switchWorkspace(id); }', destination)
+                # Queue deletion after the failed initial flush: synthesis saves
+                # settle trash before PATCH, so prequeued trash would hold prepare.
+                await expect(page.locator('#ask')).to_be_visible()
+                await page.locator(f'.claim[data-claim="{removed}"] [data-act="del"]').evaluate('button => button.click()')
+                await page.locator('#toasts .toast', has_text='Deleted the claim.').wait_for()
                 await _answer(page, 'Discard and switch')
                 try:
                     await asyncio.wait_for(held.wait(), 5)
-                    action = {'claim':'cancel', 'synthesis':'cancel-synth', 'paper-note':'cancel-note'}[kind]
-                    if kind != 'paper-note':
-                        await page.locator(f'[data-act="{action}"]').first.click()
-                    # Opening the other paper parks the first note's failed draft.
+                    # Opening another editor parks the first failed draft. Done
+                    # would try to save it and require a separate discard choice.
                     field, _ = await editor(page, kind, claims, second=True)
-                    await field.fill('Identical writing')
+                    # Do not start another synthesis save behind the held delete.
+                    # The selection boundary must capture this DOM-only edit.
+                    await field.evaluate("field => { field.value = 'Identical writing'; }")
                     release.set()
                     await expect(page.locator('#ask')).to_be_visible(timeout=2000)
                     await _answer(page, 'Cancel')
@@ -224,12 +231,15 @@ def test_save_started_during_held_delete_vetoes_selection_until_it_finishes(engi
                     assert await page.evaluate('workspaceClient.workspaceId') == 'default'
                     await expect(page.locator('#toasts')).to_contain_text('Wait for the current change')
                     save_release.set()
-                    await page.wait_for_function('workspaceClient.pendingMutations === 0 && !savingClaims.size && !V.synthSaving && !paperNotesSaving()')
+                    await page.wait_for_function('workspaceClient.pendingMutations === 0 && !savingClaims.size && !V.synthSaving && !paperNotesSaving() && !writingInFlight()')
                     assert await page.evaluate('workspaceClient.workspaceId') == 'default'
                     if kind == 'claim-conflict':
                         assert next(row for row in store.claim_rows() if row['id'] == claim_id)['text'] == 'Stored claim'
                         assert await page.evaluate('id => V.drafts[id].text', claim_id) == 'Saved while switching'
-                        assert 'changed' in await page.evaluate('V.error')
+                        await expect(page.locator(f'[data-writing-status="claim"][data-writing-id="{claim_id}"]')).to_contain_text('Couldn’t save')
+                        await expect(page.locator(f'[data-writing-status="claim"][data-writing-id="{claim_id}"]')).to_contain_text('changed')
+                        await _answer(page, 'Cancel')
+                        await expect(field).to_have_value('Saved while switching')
                     elif kind == 'claim':
                         assert next(row for row in store.claim_rows() if row['id'] == claim_id)['text'] == 'Saved while switching'
                     elif kind == 'paper-note':

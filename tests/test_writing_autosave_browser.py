@@ -212,9 +212,11 @@ def test_review_completion_resumes_blocked_claim_autosave(engine, review_succeed
 
                 await page.route('**' + path, hold_review)
                 await field.fill('Writing held behind a review')
+                await page.evaluate('id => writingAutosave("claim", id).settle()', identity)
                 await page.evaluate('id => { window.reviewing = toggleReviewed(S.claims.find(row => row.id === id)); }', identity)
                 try:
                     await asyncio.wait_for(started.wait(), 5)
+                    await page.evaluate('id => writingAutosave("claim", id).resume()', identity)
                     await expect(page.locator('[data-writing-status="claim"]').first).to_contain_text('Another change is still saving')
                     await page.locator('#btn-library-view').click()
                     async with page.expect_response(lambda response: response.url.endswith(path) and 'text' in response.request.post_data_json):
@@ -226,4 +228,91 @@ def test_review_completion_resumes_blocked_claim_autosave(engine, review_succeed
                     assert row['reviewed'] is review_succeeds
                 finally:
                     release.set()
+    run_browser(asyncio.wait_for(scenario(), 25))
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+@pytest.mark.parametrize('failure_stage', ['settle', 'delete'])
+def test_failed_paper_removal_resumes_claim_autosave(engine, failure_stage):
+    """Both early and final removal failures restore the pending autosave."""
+    removed, claims, _ = seed()
+    identity = claims[0]
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={'width': 1440, 'height': 1000})
+            with _server() as url:
+                await page.goto(url + '/#view=claims')
+                started, release = asyncio.Event(), asyncio.Event()
+                rejected_path = f'/api/papers/study/claims/{removed}' if failure_stage == 'settle' else '/api/papers/study'
+
+                async def reject_removal(route):
+                    if route.request.method == 'DELETE':
+                        started.set()
+                        await release.wait()
+                        await route.fulfill(status=503, json={'detail': 'Synthetic removal failure'})
+                    else:
+                        await route.continue_()
+
+                await page.route('**' + rejected_path, reject_removal)
+                if failure_stage == 'settle':
+                    await page.locator(f'[data-act="del"][data-claim="{removed}"]').first.click()
+                field, _ = await editor(page, 'claim', claims)
+                await field.fill('Writing survives failed removal')
+                await page.evaluate('id => writingAutosave("claim", id).settle()', identity)
+                await page.evaluate("() => { window.removing = removePaper('study'); }")
+                await _answer(page, 'Remove')
+                try:
+                    await asyncio.wait_for(started.wait(), 5)
+                    await page.evaluate('id => writingAutosave("claim", id).resume()', identity)
+                    await expect(page.locator('[data-writing-status="claim"]').first).to_contain_text('paper is being removed')
+                    path = f'/api/papers/study/claims/{identity}'
+                    async with page.expect_response(lambda response: response.url.endswith(path) and response.request.method == 'PATCH'):
+                        release.set()
+                        await page.evaluate('window.removing')
+                    assert stored(url, 'claim', identity) == 'Writing survives failed removal'
+                finally:
+                    release.set()
+    run_browser(asyncio.wait_for(scenario(), 25))
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+@pytest.mark.parametrize('kind', ['paper', 'claim', 'synthesis'])
+def test_confirmed_deletion_retires_uncertain_autosave(engine, kind):
+    """Deleted writing cannot leave a hidden failed saver blocking quit."""
+    _, claims, _ = seed()
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={'width': 1440, 'height': 1000})
+            with _server() as url:
+                await page.goto(url + '/#view=claims')
+                writing_kind = 'synthesis' if kind == 'synthesis' else 'claim'
+                field, identity = await editor(page, writing_kind, claims)
+                path = f'/api/papers/study/claims/{identity}' if writing_kind == 'claim' else '/api/syntheses/recovery'
+
+                async def fail_save(route):
+                    if route.request.method == 'PATCH':
+                        await route.fulfill(status=503, json={'detail': 'Synthetic save failure'})
+                    else:
+                        await route.continue_()
+
+                await page.route('**' + path, fail_save)
+                await field.fill('Unconfirmed writing')
+                await expect(page.locator(f'[data-writing-status="{writing_kind}"]').first).to_contain_text('Couldn’t save')
+                assert await page.evaluate('writingUnconfirmed()') is True
+                if kind == 'paper':
+                    await page.evaluate("() => { window.removing = removePaper('study'); }")
+                    await _answer(page, 'Remove')
+                else:
+                    await page.locator('#btn-library-view').click()
+                    await page.locator('#btn-claims-view').click()
+                    selector = f'[data-act="del"][data-claim="{identity}"]' if kind == 'claim' else '[data-act="del-synth"][data-topic="recovery"]'
+                    await page.locator(selector).first.click()
+                    await page.evaluate('() => { window.removing = flushTrash(); }')
+                await page.evaluate('window.removing')
+                assert await page.evaluate('writingUnconfirmed()') is False
+                assert await page.evaluate('window.doxographSaveDrafts()') is True
     run_browser(asyncio.wait_for(scenario(), 25))

@@ -262,16 +262,16 @@ def test_clearing_filters_preserves_pending_research_form(engine, action, fail):
             with _server() as url:
                 await page.goto(f"{url}/#view=research&q=alignment&tag=alignment")
                 context = page.locator("#research-context")
+                await page.route("**/api/context", hold_save)
                 await context.fill("The context submitted while filters change.")
                 form = await page.locator("#research-form").element_handle()
-                await page.route("**/api/context", hold_save)
-                await page.locator("#research-form").get_by_role("button", name="Save", exact=True).click()
+                await page.locator("#research-form").get_by_role("button", name="Done", exact=True).click()
                 await asyncio.wait_for(started.wait(), timeout=5)
                 chips = page.get_by_role("group", name="Active filters", exact=True)
                 name = "Clear all" if action == "all" else "Remove filter: Search: alignment"
                 await chips.get_by_role("button", name=name, exact=True).click()
                 assert await form.evaluate("el => el.isConnected && el === document.querySelector('#research-form')")
-                await expect(context).to_be_disabled()
+                await expect(context).to_be_enabled()
                 await expect(context).to_have_value("The context submitted while filters change.")
                 assert "q=" not in page.url
                 if action == "all":
@@ -279,15 +279,20 @@ def test_clearing_filters_preserves_pending_research_form(engine, action, fail):
                 else:
                     await expect(chips.locator(".filter-chip")).to_have_count(1)
 
+                # Typing stays live while the first request is pending; Done
+                # must include this newer text before it closes the editor.
+                await context.fill("Newer context typed while filters change.")
                 release_save.set()
                 if fail:
-                    await expect(page.locator("#content .warn")).to_contain_text("Research save failed for this test")
+                    await expect(page.locator("#ask")).to_contain_text("Research save failed for this test")
+                    await page.locator("#ask").get_by_role("button", name="Cancel", exact=True).click()
+                    await expect(page.locator('[data-writing-status="research"]')).to_contain_text("Research save failed for this test")
                     await expect(context).to_be_enabled()
-                    await expect(context).to_have_value("The context submitted while filters change.")
+                    await expect(context).to_have_value("Newer context typed while filters change.")
                     await page.unroute("**/api/context", hold_save)
-                    await page.locator("#research-form").get_by_role("button", name="Save", exact=True).click()
+                    await page.locator("#research-form").get_by_role("button", name="Done", exact=True).click()
                 await expect(page.locator("#research-form")).to_have_count(0)
-                assert httpx.get(f"{url}/api/state").json()["context"] == "The context submitted while filters change."
+                assert httpx.get(f"{url}/api/state").json()["context"] == "Newer context typed while filters change."
 
     run_browser(scenario())
 

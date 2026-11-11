@@ -529,7 +529,8 @@ function manualQuitState(kind, id) {
     draft: (claim ? V.drafts : V.synthDrafts)[id],
     draftText: JSON.stringify((claim ? V.drafts : V.synthDrafts)[id]),
     base: (claim ? V.quitClaimBases : V.quitSynthBases)[id],
-    marker: (claim ? V.unconfirmedClaims : V.unconfirmedSyntheses)[id]};
+    marker: (claim ? V.unconfirmedClaims : V.unconfirmedSyntheses)[id],
+    autosave: writingSessionState(kind, id)};
 }
 function retireManualQuitState(kind, id, seen) {
   if (seen.workspace !== workspaceClient.workspaceId) return;
@@ -539,7 +540,10 @@ function retireManualQuitState(kind, id, seen) {
   const markers = claim ? V.unconfirmedClaims : V.unconfirmedSyntheses;
   // Routine DOM recaptures replace objects without creating new writing.
   if (bases[id] === seen.base && markers[id] === seen.marker
-      && JSON.stringify(drafts[id]) === seen.draftText) delete drafts[id];
+      && JSON.stringify(drafts[id]) === seen.draftText) {
+    delete drafts[id];
+    retireWritingSession(kind, id, seen.autosave);
+  }
   if (bases[id] === seen.base) delete bases[id];
   if (markers[id] === seen.marker) delete markers[id];
 }

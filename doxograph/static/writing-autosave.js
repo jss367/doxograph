@@ -27,8 +27,11 @@ function writingAutosave(kind, id = '') {
       session.waitingForClaimMutation = false;
       if (kind === 'claim') {
         const row = S.claims.find(row => row.id === id);
-        if (!row || isRemoving(row.paper) || trash.has('claim:' + id)) return 'This claim is being removed.';
-        if (savingClaims.has(id)) { session.waitingForClaimMutation = true; return 'Another change is still saving. Try again.'; }
+        if (!row || trash.has('claim:' + id)) return 'This claim is being removed.';
+        if (isRemoving(row.paper) || savingClaims.has(id)) {
+          session.waitingForClaimMutation = true;
+          return isRemoving(row.paper) ? 'This paper is being removed.' : 'Another change is still saving. Try again.';
+        }
         if (!draft()?.text) return 'Give the claim some text.';
       }
       if (kind === 'synthesis' && trash.has('synthesis:' + id)) return 'This synthesis is being removed.';
@@ -101,9 +104,24 @@ function writingAutosave(kind, id = '') {
 /** Re-arm a save deferred by a review or another claim mutation. */
 function resumeClaimWriting(id) {
   const entry = writingAutosaves.get(JSON.stringify([workspaceClient.workspaceId, 'claim', id]));
-  if (entry?.owner !== V.drafts || !entry.session.waitingForClaimMutation || savingClaims.has(id)) return;
+  const row = S.claims.find(row => row.id === id);
+  if (entry?.owner !== V.drafts || !entry.session.waitingForClaimMutation || savingClaims.has(id)
+    || !row || isRemoving(row.paper) || trash.has('claim:' + id)) return;
   entry.session.waitingForClaimMutation = false;
   entry.saver.schedule();
+}
+/** Identify the current autosave so deletion cannot retire a newer session. */
+function writingSessionState(kind, id) {
+  const entry = writingAutosaves.get(JSON.stringify([workspaceClient.workspaceId, kind, id]));
+  return entry?.owner === V.drafts ? {entry, generation:entry.saver.generation} : null;
+}
+function retireWritingSession(kind, id, seen) {
+  if (!seen) return;
+  const key = JSON.stringify([workspaceClient.workspaceId, kind, id]);
+  const entry = writingAutosaves.get(key);
+  if (entry === seen.entry && entry.owner === V.drafts && entry.saver.generation === seen.generation && !entry.saver.saving) {
+    writingAutosaves.delete(key);
+  }
 }
 /** Finish an editor, asking before abandoning a failed save and its retry state. */
 async function finishWriting(kind, id, current) {

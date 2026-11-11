@@ -1,4 +1,4 @@
-"""Manual quit baselines follow focused edits, partial writes and confirmed deletes."""
+"""Autosave quit baselines follow focused edits, partial writes and confirmed deletes."""
 import asyncio
 
 import httpx
@@ -10,7 +10,7 @@ from doxograph import config
 from test_ask_browser import _server
 from test_browser import _answer
 from test_core_workspace_boundary_browser import editor, seed
-from test_quit_manual_editors_browser import save
+from test_quit_manual_editors_browser import save, stored
 from browser_support import inert_tools as inert_tools
 
 
@@ -27,9 +27,11 @@ async def fail_manual(page, url, kind, claims):
     await page.route('**'+path, refuse_patch)
     await field.fill('Unconfirmed manual writing')
     await save(page, kind, identity)
-    await page.wait_for_function('!savingClaims.size && !V.synthSaving')
+    await _answer(page, 'Cancel')
+    await page.wait_for_function('!writingInFlight()')
     await expect(field).to_be_enabled()
-    await page.unroute('**'+path, refuse_patch)
+    await expect(field).to_have_value('Unconfirmed manual writing')
+    assert await page.evaluate('hasQuitWriting()') is True
     return field, identity, path
 
 
@@ -55,7 +57,6 @@ def test_focused_editor_quit_lifecycle(engine, state):
                 original = await field.input_value()
                 if state == 'dom-only':
                     await field.evaluate("field => { field.value = 'Focused draft'; }")
-                    assert await page.evaluate('window.doxographSaveDrafts()') is False
                 elif state != 'untouched':
                     await field.fill('Focused draft')
                 if state == 'reverted':
@@ -64,19 +65,28 @@ def test_focused_editor_quit_lifecycle(engine, state):
                     path = '**/api/papers/study/claims/'+claims[0]
                     await page.route(path, refuse_patch)
                     await dialog.locator('button[type="submit"]').click()
-                    await expect(dialog.locator('#focus-error')).to_contain_text('Could not save')
+                    await _answer(page, 'Cancel')
+                    await expect(dialog.locator('[data-writing-status="claim"]')).to_contain_text('Couldn’t save')
                     await expect(field).to_be_enabled()
                     assert await page.evaluate('window.doxographSaveDrafts()') is False
-                    await page.unroute(path, refuse_patch)
                     if state == 'failed-reverted':
                         await field.fill(original)
                     if state == 'retried':
+                        await page.unroute(path, refuse_patch)
                         await dialog.locator('button[type="submit"]').click()
                         await expect(dialog.locator('[data-focus="edit"]')).to_be_visible()
                 await dialog.locator('[data-focus="close"]').click()
-                assert await page.evaluate('window.doxographSaveDrafts()') is (state in ('untouched', 'reverted', 'retried'))
-                if state in ('dirty', 'failed'):
-                    assert await page.evaluate('id => V.drafts[id].text', claims[0]) == 'Focused draft'
+                failed = state in ('failed', 'failed-reverted')
+                assert await page.evaluate('window.doxographSaveDrafts()') is not failed
+                expected = original if state in ('untouched', 'reverted', 'failed-reverted') else 'Focused draft'
+                if failed:
+                    assert await page.evaluate('id => V.drafts[id].text', claims[0]) == expected
+                    assert await page.evaluate('id => Boolean(V.unconfirmedClaims[id])', claims[0])
+                    assert stored(url, 'claim', claims[0]) == original
+                    await page.unroute(path, refuse_patch)
+                    assert await page.evaluate('window.doxographSaveDrafts()') is True
+                assert stored(url, 'claim', claims[0]) == expected
+                assert await page.evaluate('hasQuitWriting()') is False
     run_browser(asyncio.wait_for(scenario(), 25))
 
 
@@ -100,13 +110,25 @@ def test_partial_ack_advances_only_saved_fields(engine, operation, state):
                     field, identity = await editor(page, 'claim', claims)
                     if state == 'dirty':
                         await field.fill('Genuine unsaved text')
-                await page.evaluate('window.doxographSaveDrafts()')
+                path = '**/api/papers/study/claims/'+identity
+                if state == 'uncertain':
+                    await page.unroute(path, refuse_patch)
+
+                async def refuse_full_write(route):
+                    body = route.request.post_data_json if route.request.method == 'PATCH' else {}
+                    if 'text' in body and 'reviewed' in body:
+                        await refuse_patch(route)
+                    else:
+                        await route.continue_()
+
+                await page.route(path, refuse_full_write)
+                await page.evaluate('workspaceWritingSnapshot()')
                 if operation == 'toggle':
                     await page.locator(f'[data-act="review"][data-claim="{identity}"]').first.click()
                     await page.wait_for_function('!savingClaims.size')
                 elif operation in ('bulk', 'undo'):
                     await page.evaluate("reviewWholePaper('study')")
-                    assert await page.evaluate('window.doxographSaveDrafts()') is (state == 'clean')
+                    assert await page.evaluate('hasQuitWriting()') is (state != 'clean')
                     if operation == 'undo':
                         await page.locator('#toasts').get_by_role('button', name='Undo', exact=True).last.click()
                         await page.wait_for_function('!savingClaims.size && !editHistory.busy')
@@ -117,11 +139,22 @@ def test_partial_ack_advances_only_saved_fields(engine, operation, state):
                       V.quoteContext = {claim:id, data:{quote:row.quote, locator:row.locator, suggestion:'Acknowledged wording'}};
                     }''', identity)
                     await page.evaluate('id => usePaperWording("study", id)', identity)
-                assert await page.evaluate('window.doxographSaveDrafts()') is (state == 'clean')
+                saved_row = next(row for row in httpx.get(url+'/api/state').json()['claims'] if row['id'] == identity)
+                saved_field = 'quote' if operation == 'quote' else 'reviewed'
+                expected_field = 'Acknowledged wording' if operation == 'quote' else operation != 'undo'
+                assert saved_row[saved_field] == expected_field
+                assert await page.evaluate('([id,key]) => V.quitClaimBases[id][key]', [identity, saved_field]) == expected_field
+                assert await page.evaluate('hasQuitWriting()') is (state != 'clean')
                 if state == 'dirty':
                     assert await page.evaluate('id => V.drafts[id].text', identity) == 'Genuine unsaved text'
                 if state == 'uncertain':
                     assert await page.evaluate('id => Boolean(V.unconfirmedClaims[id])', identity)
+                assert await page.evaluate('window.doxographSaveDrafts()') is (state == 'clean')
+                await page.unroute(path, refuse_full_write)
+                assert await page.evaluate('window.doxographSaveDrafts()') is True
+                if state == 'dirty':
+                    assert stored(url, 'claim', identity) == 'Genuine unsaved text'
+                assert await page.evaluate('hasQuitWriting()') is False
     run_browser(asyncio.wait_for(scenario(), 25))
 
 
@@ -140,6 +173,9 @@ def test_deleted_manual_record_retires_only_confirmed_old_state(engine, kind, ou
             attempts = []
 
             async def hold(route):
+                if route.request.method == 'PATCH':
+                    await refuse_patch(route)
+                    return
                 if route.request.method == 'DELETE':
                     attempts.append(route.request.url)
                     started.set()
@@ -176,7 +212,7 @@ def test_deleted_manual_record_retires_only_confirmed_old_state(engine, kind, ou
                     await page.evaluate('() => { window.removing = flushTrash(); }')
                 try:
                     await asyncio.wait_for(started.wait(), 5)
-                    assert await page.evaluate('window.doxographSaveDrafts()') is False
+                    assert await page.evaluate('hasQuitWriting()') is True
                     if outcome in ('newer', 'other-workspace'):
                         await page.evaluate('''([kind,id,other,move]) => {
                           if (move) { workspaceClient.select(other); resetWorkspaceView(); }
@@ -193,7 +229,9 @@ def test_deleted_manual_record_retires_only_confirmed_old_state(engine, kind, ou
                     release.set()
                     await page.evaluate('window.removing')
                     clean = outcome == 'success'
-                    assert await page.evaluate('window.doxographSaveDrafts()') is clean
+                    assert await page.evaluate('hasQuitWriting()') is not clean
+                    if outcome not in ('newer', 'other-workspace'):
+                        assert await page.evaluate('window.doxographSaveDrafts()') is clean
                     if outcome in ('newer', 'other-workspace'):
                         assert await page.evaluate('([kind,id]) => kind === "synthesis" ? V.synthDrafts[id] : V.drafts[id].text', [kind, identity]) == 'Newer retained writing'
                         assert await page.evaluate('([kind,id]) => (kind === "synthesis" ? V.unconfirmedSyntheses : V.unconfirmedClaims)[id].sequence', [kind, identity]) == 999
@@ -215,6 +253,9 @@ def test_manual_ack_keeps_writing_created_after_the_request(engine, pathway):
 
             async def hold(route):
                 if route.request.method == 'PATCH':
+                    if started.is_set():
+                        await refuse_patch(route)
+                        return
                     result = await route.fetch()
                     assert result.status == 200
                     started.set()
@@ -233,11 +274,10 @@ def test_manual_ack_keeps_writing_created_after_the_request(engine, pathway):
                     field = page.locator('#focused-review textarea[name="text"]')
                 path = '/api/syntheses/recovery' if kind == 'synthesis' else f'/api/papers/study/claims/{identity}'
                 await page.route('**'+path, hold)
+                if pathway == 'synthesis-other':
+                    await page.route('**/api/syntheses/scaling', refuse_patch)
                 await field.fill('Acknowledged submitted text')
-                if pathway == 'focused-async':
-                    await page.locator('#focused-review button[type="submit"]').click()
-                else:
-                    await save(page, kind, identity)
+                await page.evaluate('([kind,id]) => { window.savingWriting = writingAutosave(kind,id).flush(); }', [kind, identity])
                 try:
                     await asyncio.wait_for(started.wait(), 5)
                     if pathway == 'normal-to-focused':
@@ -245,8 +285,6 @@ def test_manual_ack_keeps_writing_created_after_the_request(engine, pathway):
                         await page.locator('#btn-focus-review').click()
                         field = page.locator('#focused-review textarea[name="text"]')
                         await field.fill('Newer retained writing')
-                        await page.locator('#focused-review [data-act="cancel"]').click()
-                        await expect(field).to_have_value('Newer retained writing')
                     elif pathway == 'synthesis-other':
                         await page.locator('.synth[data-topic="scaling"] [data-act="edit-synth"]').click()
                         field = page.locator('textarea[data-synth="scaling"]')
@@ -254,18 +292,19 @@ def test_manual_ack_keeps_writing_created_after_the_request(engine, pathway):
                         await page.locator('[data-act="del-synth"][data-topic="recovery"]').click()
                         assert await page.evaluate('trash.has("synthesis:recovery")') is False
                     else:
-                        # Model an already admitted asynchronous form update while controls are disabled.
+                        # A later edit is admitted while the first write awaits its acknowledgment.
                         await field.evaluate("field => { field.value = 'Newer retained writing'; field.dispatchEvent(new Event('input', {bubbles:true})); }")
                     release.set()
-                    await page.wait_for_function('!savingClaims.size && !V.synthSaving')
-                    if pathway == 'focused-async':
-                        await expect(page.locator('#focused-review [data-focus="edit"]')).to_be_visible()
-                        await page.locator('#focused-review [data-focus="edit"]').click()
-                        field = page.locator('#focused-review textarea[name="text"]')
+                    await page.evaluate('window.savingWriting')
                     await expect(field).to_have_value('Newer retained writing')
                     assert await page.evaluate('window.doxographSaveDrafts()') is False
                     if pathway == 'synthesis-other':
                         assert await page.evaluate('V.synthEditing') == 'scaling'
+                        await page.unroute('**/api/syntheses/scaling', refuse_patch)
+                    await page.unroute('**'+path, hold)
+                    assert await page.evaluate('window.doxographSaveDrafts()') is True
+                    target = 'scaling' if pathway == 'synthesis-other' else identity
+                    assert stored(url, kind, target) == 'Newer retained writing'
                 finally:
                     release.set()
     run_browser(asyncio.wait_for(scenario(), 25))
@@ -285,6 +324,9 @@ def test_partial_ack_does_not_replace_newer_or_other_workspace_writing(engine, m
 
             async def hold(route):
                 if route.request.method == 'PATCH':
+                    if 'text' in route.request.post_data_json:
+                        await refuse_patch(route)
+                        return
                     response = await route.fetch()
                     assert response.status == 200
                     started.set()
@@ -314,9 +356,13 @@ def test_partial_ack_does_not_replace_newer_or_other_workspace_writing(engine, m
                     release.set()
                     await page.evaluate('window.toggling')
                     assert await page.evaluate('id => V.drafts[id].text', identity) == 'Newer retained writing'
-                    assert await page.evaluate('window.doxographSaveDrafts()') is False
+                    assert await page.evaluate('hasQuitWriting()') is True
                     if move_workspace:
                         assert await page.evaluate('id => V.quitClaimBases[id].reviewed', identity) is False
+                    else:
+                        await page.unroute('**/api/papers/study/claims/'+identity, hold)
+                        assert await page.evaluate('window.doxographSaveDrafts()') is True
+                        assert stored(url, 'claim', identity) == 'Newer retained writing'
                 finally:
                     release.set()
     run_browser(asyncio.wait_for(scenario(), 25))

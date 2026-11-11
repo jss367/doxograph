@@ -147,3 +147,38 @@ test('markSaving resumes the deferred autosave after the last overlapping writer
   assert.equal(saver.generation,1);
   await saver.settle();
 });
+
+
+test('failed paper removal resumes a save only after its guard is lifted', async () => {
+  const {context,saver,id,writes} = editor('claim');
+  let removing = true;
+  context.isRemoving = () => removing;
+  assert.equal(await saver.flush(),false);
+  assert.equal(writes(),0);
+  context.resumeClaimWriting(id);
+  assert.equal(saver.generation,0);
+  removing = false;
+  context.resumeClaimWriting(id);
+  assert.equal(saver.generation,1);
+  await saver.settle();
+});
+
+for (const kind of ['claim','synthesis']) {
+  for (const newer of [false,true]) {
+    test(`${kind}: confirmed deletion retires only ${newer ? 'old' : 'unchanged'} autosave state`, async () => {
+      const {context,saver,id} = editor(kind);
+      const source = readFileSync(resolve(__dirname, '../../doxograph/static/app.js'), 'utf8');
+      vm.runInContext(source.slice(source.indexOf('function manualQuitState('), source.indexOf('function rememberClaimQuitBase(')), context);
+      assert.equal(await saver.flush(),false);
+      const seen = context.manualQuitState(kind,id);
+      if (newer) saver.schedule();
+      context.retireManualQuitState(kind,id,seen);
+      assert.equal(saver.unconfirmed,newer);
+      if (!newer) {
+        assert.equal(await saver.flush(),true);
+        assert.equal(context.writingSessionState(kind,id),null);
+      }
+      await saver.settle();
+    });
+  }
+}
