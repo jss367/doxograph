@@ -104,11 +104,13 @@ def test_failed_done_can_be_cancelled_then_discarded(engine, kind):
             page = await browser.new_page(viewport={'width': 1440, 'height': 1000})
             with _server() as url:
                 await page.goto(url + '/#view=claims')
+                paper = 'study'
                 if kind == 'focused-claim':
                     await page.locator('#btn-focus-review').click()
                     await page.locator('[data-focus="edit"]').click()
                     field = page.locator('#focused-review textarea[name="text"]')
                     identity = await page.locator('#focused-review form[data-form]').get_attribute('data-form')
+                    paper = await page.locator('#focused-review .edit-wrap').get_attribute('data-paper')
                     done = page.locator('#focused-review button[type="submit"]')
                 else:
                     field, identity = await editor(page, kind, claims)
@@ -116,7 +118,7 @@ def test_failed_done_can_be_cancelled_then_discarded(engine, kind):
                     done = page.locator(selector).first
                 saved_kind = 'claim' if kind == 'focused-claim' else kind
                 original = stored(url, saved_kind, identity)
-                path = f'/api/papers/study/claims/{identity}' if saved_kind == 'claim' else '/api/syntheses/recovery' if kind == 'synthesis' else '/api/context'
+                path = f'/api/papers/{paper}/claims/{identity}' if saved_kind == 'claim' else '/api/syntheses/recovery' if kind == 'synthesis' else '/api/context'
                 requests = []
 
                 async def reject(route):
