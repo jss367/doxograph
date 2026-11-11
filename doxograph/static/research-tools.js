@@ -1054,12 +1054,26 @@ const ResearchTools = (() => {
   // Read, change, write: the saved notebook rather than a copy held since the
   // modal last opened, so a highlight made here cannot overwrite a board saved
   // there. `fn` returns false to leave the notebook as it is.
+  const notebookMutations = new Map();
   async function mutateNotebook(ws, fn, {refresh = true, history = true} = {}) {
-    const latest = await request('', 'GET', undefined, ws);
-    if (fn(latest) === false) return latest;
-    const saved = await request('', 'PUT', latest, ws, history);
-    if (refresh) await refreshAll();
-    return saved;
+    // Autosave, reader actions and page progress all update the same revision.
+    // Read only when this workspace's previous transaction has finished.
+    const transaction = (notebookMutations.get(ws) || Promise.resolve()).then(async () => {
+      const latest = await request('', 'GET', undefined, ws);
+      if (fn(latest) === false) return {saved:latest, changed:false};
+      return {saved:await request('', 'PUT', latest, ws, history), changed:true};
+    });
+    // A refused write must not poison subsequent actions or retries.
+    const settled = transaction.then(() => {}, () => {});
+    notebookMutations.set(ws, settled);
+    try {
+      const {saved, changed} = await transaction;
+      // Refresh can itself schedule reader work: it must not own the queue.
+      if (refresh && changed) await refreshAll();
+      return saved;
+    } finally {
+      if (notebookMutations.get(ws) === settled) notebookMutations.delete(ws);
+    }
   }
   // The rail's list of the paper's highlights, in page order, drawn by app.js
   // under the paper's note. The note being edited is held here, not in the DOM:
