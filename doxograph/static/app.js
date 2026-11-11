@@ -1128,7 +1128,7 @@ $('panes').addEventListener('click', async (event) => {
     if (act === 'drop-link') {
       button.closest('.linkrow').querySelector('[name="link-claim"]').value = '';
       button.closest('.linkrow').style.display = 'none';
-      captureOpenEditor(); writingAutosave('claim', claim).schedule();
+      captureOpenEditor(); scheduleWriting(event);
       return;
     }
     if (act === 'review') {

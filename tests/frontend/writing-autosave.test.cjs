@@ -73,3 +73,27 @@ test('discard retires a pending timer without writing an abandoned draft', async
   assert.equal(writes(),1);
   assert.ok(context.V.drafts[id]);
 });
+
+
+test('link-button edits schedule the owning form, but not new or retired forms', async () => {
+  const {context,saver,id} = editor('claim');
+  context.NEW_CLAIM_ID = '__new__';
+  context.readForm = () => ({text:'Draft claim',ledger_links:[]});
+  const form = {dataset:{form:id,workspace:'default'}};
+  const target = {
+    dataset:{act:'drop-link'},
+    closest: selector => ['[data-workspace]','form[data-form]'].includes(selector) ? form : null,
+    matches: () => false,
+  };
+  context.scheduleWriting({target});
+  assert.equal(saver.generation,1);
+  assert.equal(context.V.drafts[id].ledger_links.length,0);
+  await saver.settle();
+  form.dataset.form = context.NEW_CLAIM_ID;
+  context.scheduleWriting({target});
+  assert.equal(saver.generation,1);
+  assert.equal(context.V.drafts.__new__,undefined);
+  form.dataset.form = id; form.dataset.workspace = 'retired-workspace';
+  context.scheduleWriting({target});
+  assert.equal(saver.generation,1);
+});

@@ -1,6 +1,8 @@
 """Existing writing saves without a submit, including edits made in flight."""
 import asyncio
 
+import httpx
+
 import pytest
 from playwright.async_api import expect
 
@@ -149,3 +151,30 @@ def test_failed_done_can_be_cancelled_then_discarded(engine, kind):
                 assert await page.evaluate('window.doxographSaveDrafts()') is True
                 assert stored(url, saved_kind, identity) == 'Valid writing after discard'
     run_browser(asyncio.wait_for(scenario(), 30))
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+def test_removing_a_claim_link_autosaves_after_navigation(engine):
+    """A link-only edit saves the containing claim without a Done or quit flush."""
+    _, claims, _ = seed()
+    identity = claims[0]
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={'width': 1440, 'height': 1000})
+            with _server() as url:
+                assert httpx.put(url + '/api/ledger', json={'claims': [{'id': 'L1', 'text': 'My claim'}]}).status_code == 200
+                path = f'/api/papers/study/claims/{identity}'
+                assert httpx.patch(url + path, json={'ledger_links': [{'claim': 'L1', 'relation': 'supports', 'note': ''}]}).status_code == 200
+                await page.goto(url + '/#view=claims')
+                await editor(page, 'claim', claims)
+                form = page.locator(f'form[data-form="{identity}"]')
+                async with page.expect_response(lambda response: response.url.endswith(path) and response.request.method == 'PATCH') as saved:
+                    await form.locator('[data-act="drop-link"]').first.click()
+                    await page.locator('#btn-library-view').click()
+                assert (await saved.value).status == 200
+                row = next(row for row in httpx.get(url + '/api/state').json()['claims'] if row['id'] == identity)
+                assert row['ledger_links'] == []
+                assert await page.evaluate('writingAutosave("claim", "").generation') == 0
+    run_browser(asyncio.wait_for(scenario(), 20))
