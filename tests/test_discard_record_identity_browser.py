@@ -51,6 +51,17 @@ def test_held_delete_discard_consent_includes_record_identity(engine, editor, de
                          'text':'Synthetic marked text.', 'color':'yellow', 'note':'Saved note'}
                         for identity in ['mark-a', 'mark-b']]
                     assert httpx.put(url+'/api/notebook', json=notebook).status_code == 200
+                    # Switching flushes note autosave first. Keep these notes
+                    # unsaved so consent, rather than successful persistence,
+                    # controls the workspace boundary. Reading saves still work.
+                    async def refuse_note_save(route):
+                        payload = route.request.post_data_json if route.request.method == 'PUT' else {}
+                        if any(mark['note'] != 'Saved note' for mark in (payload or {}).get('highlights', [])
+                               if mark['id'] in {'mark-a', 'mark-b'}):
+                            await route.fulfill(status=503, json={'detail': 'Synthetic unsaved draft'})
+                        else:
+                            await route.continue_()
+                    await page.route('**/api/notebook', refuse_note_save)
                 await page.goto(url+'/#view=claims')
                 await page.locator(f'.claim[data-claim="{claim}"] [data-act="del"]').click()
                 await page.locator('#toasts .toast', has_text='Deleted the claim.').wait_for()
@@ -74,8 +85,9 @@ def test_held_delete_discard_consent_includes_record_identity(engine, editor, de
                             await _answer(page, 'Discard changes')
                             await expect(field).to_have_value('Dataset B')
                         else:
-                            await page.locator('[data-highlight="mark-b"] [data-tool="edit-highlight"]').click()
+                            await page.locator('[data-highlight="mark-a"] [data-tool="discard-highlight"]').click()
                             await _answer(page, 'Discard note')
+                            await page.locator('[data-highlight="mark-b"] [data-tool="edit-highlight"]').click()
                             field = page.locator('[data-highlight-note="mark-b"]')
                             await expect(field).to_have_value('Saved note')
                         await field.fill('Identical replacement draft')

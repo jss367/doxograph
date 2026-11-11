@@ -562,7 +562,13 @@ def test_library_pane_keeps_workspace_interactive_while_answering(engine):
                     draft = page.locator('form[data-form] textarea[name="note"]')
                     await draft.fill('A note made while the agent answers.')
                     await expect(draft).to_have_value('A note made while the agent answers.')
-                    await page.locator('form[data-form] [data-act="cancel"]').click()
+                    # Existing writing autosaves; Done flushes and closes it
+                    # without waiting for the independent Ask request.
+                    form = page.locator('form[data-form]')
+                    await form.get_by_role('button', name='Done', exact=True).click()
+                    await expect(form).to_have_count(0)
+                    assert store.load_paper('b')['claims'][0]['note'] == 'A note made while the agent answers.'
+                    await expect(page.locator('#agent-status')).to_contain_text('Looking through')
                 finally:
                     release.set()
                 await expect(page.locator('#agent-messages')).to_contain_text('The studies report improved recovery.')

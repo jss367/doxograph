@@ -1217,6 +1217,17 @@ def test_mark_drafts_survive_a_refused_switch_a_removed_mark_and_a_late_resume(e
                 data['reading'] = [{'paper':'paper','status':'reading','page':2,'bookmarks':[]}]
                 data['highlights'] = [{'id':'one','paper':'paper','page':1,'rects':[rect],'text':'Recovery depends on conditions.','color':'yellow','note':'Saved note'}]
                 assert httpx.put(url+'/api/notebook', json=data).status_code == 200
+                # Workspace switches flush highlight autosave. Keep this note
+                # unsaved so declining the later claim prompt must preserve it,
+                # without interfering with reader progress or notebook reads.
+                async def refuse_note_save(route):
+                    payload = route.request.post_data_json if route.request.method == 'PUT' else {}
+                    if any(mark['id'] == 'one' and mark['note'] == 'Changed note'
+                           for mark in (payload or {}).get('highlights', [])):
+                        await route.fulfill(status=503, json={'detail': 'Synthetic unsaved note'})
+                    else:
+                        await route.continue_()
+                await page.route('**/api/notebook', refuse_note_save)
                 await page.goto(f"{url}/#view=claims")
                 await page.locator('#papers li[data-paper="paper"]').click()
                 rail = page.locator('#content')
@@ -1242,6 +1253,7 @@ def test_mark_drafts_survive_a_refused_switch_a_removed_mark_and_a_late_resume(e
                 await page.get_by_role('button', name='Cancel', exact=True).first.click()
                 # The mark is removed in another window while its note is open.
                 data = httpx.get(url+'/api/notebook').json()
+                assert data['highlights'][0]['note'] == 'Saved note'
                 data['highlights'] = []
                 assert httpx.put(url+'/api/notebook', json=data).status_code == 200
                 await _poll(page)
@@ -1252,6 +1264,7 @@ def test_mark_drafts_survive_a_refused_switch_a_removed_mark_and_a_late_resume(e
                 await _answer(page, 'Discard note')
                 await ready(page)
                 assert await recovery.count() == 0
+                await page.unroute('**/api/notebook', refuse_note_save)
                 # No phantom draft stands in the way of a switch now.
                 await page.locator('#workspace').select_option(other['id'])
                 await page.locator('#papers li[data-paper="elsewhere"]').wait_for()

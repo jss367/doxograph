@@ -108,6 +108,9 @@ def test_failed_done_can_be_cancelled_then_discarded(engine, kind):
                 await page.goto(url + '/#view=claims')
                 paper = 'study'
                 if kind == 'focused-claim':
+                    # The review button exists before the initial state fetch
+                    # has populated visibleClaims; wait for a seeded claim.
+                    await expect(page.locator(f'[data-act="edit"][data-claim="{claims[0]}"]').first).to_be_visible()
                     await page.locator('#btn-focus-review').click()
                     await page.locator('[data-focus="edit"]').click()
                     field = page.locator('#focused-review textarea[name="text"]')
@@ -199,8 +202,13 @@ def test_review_completion_resumes_blocked_claim_autosave(engine, review_succeed
                 writes = []
 
                 async def hold_review(route):
+                    if route.request.method != 'PATCH':
+                        await route.continue_()
+                        return
                     patch = route.request.post_data_json
-                    if set(patch) == {'reviewed'}:
+                    # Edit history adds optimistic-concurrency metadata to
+                    # every claim PATCH, including a review-only mutation.
+                    if set(patch) - {'expected_revision'} == {'reviewed'}:
                         started.set()
                         await release.wait()
                         if not review_succeeds:
@@ -219,7 +227,7 @@ def test_review_completion_resumes_blocked_claim_autosave(engine, review_succeed
                     await page.evaluate('id => writingAutosave("claim", id).resume()', identity)
                     await expect(page.locator('[data-writing-status="claim"]').first).to_contain_text('Another change is still saving')
                     await page.locator('#btn-library-view').click()
-                    async with page.expect_response(lambda response: response.url.endswith(path) and 'text' in response.request.post_data_json):
+                    async with page.expect_response(lambda response: response.url.endswith(path) and response.request.method == 'PATCH' and 'text' in response.request.post_data_json):
                         release.set()
                         await page.evaluate('window.reviewing')
                     assert len(writes) == 1

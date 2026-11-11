@@ -1,6 +1,7 @@
 """App edits and text editing share the conventional undo shortcuts."""
 import httpx
 import pytest
+from playwright.async_api import expect
 
 from browser_support import browser_session, run_browser
 from doxograph import config, store
@@ -44,6 +45,10 @@ def test_highlights_undo_redo_and_text_editing(engine):
                 await mark.wait_for()
                 await page.keyboard.press('Control+Shift+z')
                 await green.wait_for()
+                # Pause debounce timers while exercising native text history:
+                # these keystrokes must not create unrelated persisted edits.
+                await page.clock.install()
+                await page.clock.pause_at(await page.evaluate('Date.now() + 1000'))
                 # A typed note uses native text undo and leaves the mark intact.
                 # Native text undo is Command-Z on macOS and Control-Z on Linux.
                 await page.get_by_role('button', name='Add note', exact=True).click()
@@ -52,12 +57,22 @@ def test_highlights_undo_redo_and_text_editing(engine):
                 await field.press('ControlOrMeta+z')
                 assert await field.input_value() != 'My note'
                 assert len(httpx.get(url + '/api/notebook').json()['highlights']) == 1
+                await field.press('ControlOrMeta+Shift+z')
+                await expect(field).to_have_value('My note')
+                # Return to the persisted empty note before Done. Closing now
+                # must not add a note edit above the color/highlight history.
+                await field.fill('')
+                await page.locator('[data-tool="save-highlight"]').click()
+                await field.wait_for(state='hidden')
+                await page.clock.resume()
+                [saved] = httpx.get(url + '/api/notebook').json()['highlights']
+                assert saved['note'] == '' and saved['color'] == 'green'
                 # The function used by the native menu follows the same route.
-                await page.locator('[data-tool="cancel-highlight"]').click()
                 assert await page.evaluate('window.doxographUndo(false)') is True
                 await mark.wait_for()
                 assert await page.evaluate('window.doxographUndo(false)') is True
                 await mark.wait_for(state='hidden')
+                assert httpx.get(url + '/api/notebook').json()['highlights'] == []
                 assert not errors
 
     run_browser(scenario())

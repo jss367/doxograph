@@ -217,8 +217,12 @@ def test_unsent_topic_survives_workspace_redraw_and_is_part_of_quit_consent(rese
                 await expect(page.locator('#new-tag')).to_have_value('A different unsent topic')
                 await expect(context).to_have_value('Keep this research writing' if research_changed else before)
                 await page.locator('#new-tag').fill('')
-                assert await page.evaluate('window.doxographSaveDrafts()') is (not research_changed)
-                assert not httpx.get(url + '/api/state').json()['tags']
+                # Research writing flushes automatically; only the unsent
+                # topic blocked quit, and clearing it does not create a tag.
+                assert await page.evaluate('window.doxographSaveDrafts()') is True
+                saved = httpx.get(url + '/api/state').json()
+                assert saved['context'] == ('Keep this research writing' if research_changed else before)
+                assert not saved['tags']
     run_browser(scenario())
 
 
