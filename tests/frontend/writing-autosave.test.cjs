@@ -97,3 +97,53 @@ test('link-button edits schedule the owning form, but not new or retired forms',
   context.scheduleWriting({target});
   assert.equal(saver.generation,1);
 });
+
+
+test('a save blocked by a claim mutation resumes only after the last mutation', async () => {
+  const {context,saver,id,writes} = editor('claim');
+  context.savingClaims.add(id);
+  assert.equal(await saver.flush(),false);
+  assert.equal(writes(),0);
+  context.resumeClaimWriting(id);
+  assert.equal(saver.generation,0);
+  context.savingClaims.delete(id);
+  context.resumeClaimWriting(id);
+  assert.equal(saver.generation,1);
+  context.resumeClaimWriting(id);
+  assert.equal(saver.generation,1);
+  await saver.settle();
+});
+
+for (const change of ['workspace','owner','discard']) {
+  test(`claim mutation completion cannot revive a ${change} session`, async () => {
+    const {context,saver,id,answer} = editor('claim');
+    context.savingClaims.add(id);
+    assert.equal(await saver.flush(),false);
+    if (change === 'workspace') context.workspaceClient.workspaceId = 'new-workspace';
+    if (change === 'owner') context.V.drafts = {};
+    if (change === 'discard') {
+      const finishing = context.finishWriting('claim',id,() => true);
+      await new Promise(resolve => setImmediate(resolve));
+      answer(true);
+      assert.equal(await finishing,'discarded');
+    }
+    context.savingClaims.delete(id);
+    context.resumeClaimWriting(id);
+    assert.equal(saver.generation,0);
+  });
+}
+
+
+test('markSaving resumes the deferred autosave after the last overlapping writer', async () => {
+  const {context,saver,id} = editor('claim');
+  context.$ = () => ({addEventListener() {}});
+  vm.runInContext(readFileSync(resolve(__dirname, '../../doxograph/static/claims.js'), 'utf8'), context);
+  context.markSaving(id,true);
+  context.markSaving(id,true);
+  assert.equal(await saver.flush(),false);
+  context.markSaving(id,false);
+  assert.equal(saver.generation,0);
+  context.markSaving(id,false);
+  assert.equal(saver.generation,1);
+  await saver.settle();
+});

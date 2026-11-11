@@ -65,6 +65,7 @@ function markSaving(id, busy) {
   // to finish must not unfreeze the form while the other is still running.
   const n = (savingClaims.get(id) || 0) + (busy ? 1 : -1);
   if (n > 0) savingClaims.set(id, n); else savingClaims.delete(id);
+  if (!busy && n <= 0) resumeClaimWriting(id);
   applySavingState();
 }
 

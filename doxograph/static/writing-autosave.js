@@ -24,10 +24,11 @@ function writingAutosave(kind, id = '') {
       && writingAutosaves.get(key)?.saver === saver ? session : null,
     dirty: () => V.drafts === owner && dirty(),
     blocked: () => {
+      session.waitingForClaimMutation = false;
       if (kind === 'claim') {
         const row = S.claims.find(row => row.id === id);
         if (!row || isRemoving(row.paper) || trash.has('claim:' + id)) return 'This claim is being removed.';
-        if (savingClaims.has(id)) return 'Another change is still saving. Try again.';
+        if (savingClaims.has(id)) { session.waitingForClaimMutation = true; return 'Another change is still saving. Try again.'; }
         if (!draft()?.text) return 'Give the claim some text.';
       }
       if (kind === 'synthesis' && trash.has('synthesis:' + id)) return 'This synthesis is being removed.';
@@ -94,8 +95,15 @@ function writingAutosave(kind, id = '') {
       });
     },
   });
-  writingAutosaves.set(key, {owner, saver});
+  writingAutosaves.set(key, {owner, saver, session});
   return saver;
+}
+/** Re-arm a save deferred by a review or another claim mutation. */
+function resumeClaimWriting(id) {
+  const entry = writingAutosaves.get(JSON.stringify([workspaceClient.workspaceId, 'claim', id]));
+  if (entry?.owner !== V.drafts || !entry.session.waitingForClaimMutation || savingClaims.has(id)) return;
+  entry.session.waitingForClaimMutation = false;
+  entry.saver.schedule();
 }
 /** Finish an editor, asking before abandoning a failed save and its retry state. */
 async function finishWriting(kind, id, current) {
