@@ -168,3 +168,23 @@ def test_a_removed_ledger_id_is_never_given_to_another_claim(client):
     client.put("/api/ledger", json={"claims": [{"id": "L2", "text": "Kept, reworded."}]})
     assert store.retired_ledger_ids() == ["L1", "my claim"]
     assert store.load_ledger() == [{"id": "L2", "text": "Kept, reworded."}]
+
+
+@pytest.mark.browser
+def test_export_reveals_the_exact_anchor_for_a_literal_percent_escape(tmp_path):
+    from browser_support import browser_session, run_browser
+
+    store.save_ledger([{"id": "my claim", "text": "Space"},
+                       {"id": "my%20claim", "text": "Literal escape"}])
+    url = export.write(tmp_path / "export.html").as_uri()
+
+    async def scenario():
+        async with browser_session() as browser:
+            page = await browser.new_page()
+            await page.add_init_script(
+                "Element.prototype.scrollIntoView = function () { window.revealed = this.id }"
+            )
+            await page.goto(url + "#ledger-my%2520claim")
+            assert await page.evaluate("window.revealed") == "ledger-my%2520claim"
+
+    run_browser(scenario())

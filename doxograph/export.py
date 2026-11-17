@@ -129,9 +129,11 @@ apply();
 // A link from another document names one paper, claim, or ledger entry. If
 // the filters hide it, they are cleared, so the link never lands on nothing.
 function reveal() {
-  let target = null;
-  try { target = document.getElementById(decodeURIComponent(location.hash.slice(1))); } catch (_) {}
-  target = target || document.getElementById(location.hash.slice(1));
+  const fragment = location.hash.slice(1);
+  let target = document.getElementById(fragment);
+  if (!target) {
+    try { target = document.getElementById(decodeURIComponent(fragment)); } catch (_) {}
+  }
   if (!target) return;
   if (target.closest('[hidden]')) {
     q.value = ''; kindSel.value = ''; tagSel.value = '';
@@ -159,9 +161,8 @@ def _permalink(kind: str, identifier: str) -> str:
             f'title="Link to this {"entry" if kind == "ledger" else kind}">#</a>')
 
 
-def _web_links(links: list[str] | None) -> list[str]:
-    # Stored links are checked when saved; a hand-edited file is not.
-    return [link for link in links or [] if link.lower().startswith(("https://", "http://"))]
+def _is_web_link(link: str) -> bool:
+    return link.lower().startswith(("https://", "http://"))
 
 
 def _authors(authors: list[str]) -> str:
@@ -295,7 +296,7 @@ def render(title: str = "Doxograph") -> str:
     ledger_by_id = {c["id"]: c for c in ledger}
     tensions = [t for t in store.tension_rows(rows) if t.get("status") != "dismissed"]
     agreements = [a for a in store.agreement_rows(rows) if a.get("status") != "dismissed"]
-    syntheses = {s["topic"]: s for s in store.synthesis_rows(rows)}
+    syntheses = {s["topic"]: s for s in store.synthesis_rows(rows, tensions)}
     rows_by_id = {r["id"]: r for r in rows}
     anchored: set[str] = set()
     generated = store.now()
@@ -392,8 +393,8 @@ def render(title: str = "Doxograph") -> str:
         source = paper.get("source") or {}
         link = source.get("url") or ""
         heading = _e(paper.get("title") or paper["key"])
-        code = _web_links(paper.get("code"))
-        if link:
+        code = [url for url in paper.get("code") or [] if _is_web_link(url)]
+        if _is_web_link(link):
             heading = f'<a href="{_e(link)}">{heading}</a>'
         body.append(
             f'<div class="paper" id="{_e(anchor("paper", paper["key"]))}">'
