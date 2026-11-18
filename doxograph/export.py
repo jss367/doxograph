@@ -46,8 +46,9 @@ h3 { font-size: 1rem; margin: 1.75rem 0 .5rem; }
 .claim .meta a { color: var(--accent); }
 .permalink { color: var(--muted); text-decoration: none; margin-left: .35rem; font-size: .82rem; }
 .permalink:hover { color: var(--accent); }
-:target { scroll-margin-top: 4.5rem; }
-.claim:target, .paper:target, .ledger:target { background: var(--panel); outline: 2px solid var(--accent);
+:target, .fragment-target { scroll-margin-top: 4.5rem; }
+:root:not(.fragment-targets) :is(.claim, .paper, .ledger):target,
+:is(.claim, .paper, .ledger).fragment-target { background: var(--panel); outline: 2px solid var(--accent);
   outline-offset: 2px; border-radius: 3px; }
 .claim .evidence { font-size: .88rem; margin: .35rem 0 0; }
 .claim blockquote { margin: .4rem 0 0; padding-left: .7rem; border-left: 2px solid var(--line);
@@ -128,13 +129,22 @@ apply();
 
 // A link from another document names one paper, claim, or ledger entry. If
 // the filters hide it, they are cleared, so the link never lands on nothing.
+let selectedTarget = null;
 function reveal() {
+  // Once the resolver runs, its exact-first choice owns selection as well
+  // as scrolling. Keep native :target styling only as a no-script fallback.
+  document.documentElement.classList.add('fragment-targets');
+  if (selectedTarget) selectedTarget.classList.remove('fragment-target');
+  selectedTarget = null;
   const fragment = location.hash.slice(1);
+  if (!fragment) return;
   let target = document.getElementById(fragment);
   if (!target) {
     try { target = document.getElementById(decodeURIComponent(fragment)); } catch (_) {}
   }
   if (!target) return;
+  selectedTarget = target;
+  target.classList.add('fragment-target');
   if (target.closest('[hidden]')) {
     q.value = ''; kindSel.value = ''; tagSel.value = '';
     apply();
@@ -142,7 +152,7 @@ function reveal() {
   target.scrollIntoView();
 }
 window.addEventListener('hashchange', reveal);
-if (location.hash) reveal();
+reveal();
 """
 
 
