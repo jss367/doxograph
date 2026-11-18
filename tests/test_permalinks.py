@@ -168,3 +168,81 @@ def test_a_removed_ledger_id_is_never_given_to_another_claim(client):
     client.put("/api/ledger", json={"claims": [{"id": "L2", "text": "Kept, reworded."}]})
     assert store.retired_ledger_ids() == ["L1", "my claim"]
     assert store.load_ledger() == [{"id": "L2", "text": "Kept, reworded."}]
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize("navigation", ["hash", "history"])
+def test_export_reveals_the_exact_anchor_for_a_literal_percent_escape(tmp_path, navigation):
+    from browser_support import browser_session, run_browser
+
+    store.save_ledger([{"id": "my claim", "text": "Space"},
+                       {"id": "my%20claim", "text": "Literal escape"}])
+    url = export.write(tmp_path / "export.html").as_uri()
+
+    async def scenario():
+        async with browser_session() as browser:
+            page = await browser.new_page()
+            await page.add_init_script(
+                "Element.prototype.scrollIntoView = function () { window.revealed = this.id };"
+                "window.hashChanges = 0;"
+                "window.addEventListener('hashchange', () => window.hashChanges++);"
+            )
+            await page.goto(url + "#ledger-my%2520claim")
+            assert await page.evaluate("window.revealed") == "ledger-my%2520claim"
+            async def assert_selection(expected):
+                # Check the rendered outline, not the implementation's marker:
+                # native :target can select a different percent-decoded ID.
+                assert await page.locator('.ledger').evaluate_all(
+                    "nodes => nodes.filter(node => getComputedStyle(node).outlineStyle === 'solid')"
+                    ".map(node => node.id)"
+                ) == ([expected] if expected else [])
+
+            await assert_selection("ledger-my%2520claim")
+            for fragment, expected in (
+                ("ledger-my%20claim", "ledger-my%20claim"),
+                ("ledger-my%2520claim", "ledger-my%2520claim"),
+                ("missing", None),
+                ("ledger-my%2520claim", "ledger-my%2520claim"),
+                ("", None),
+                # Decoded lookup remains available when no exact ID exists.
+                ("ledger-my%252520claim", "ledger-my%2520claim"),
+                ("%invalid", None),
+            ):
+                changes = await page.evaluate("window.hashChanges")
+                await page.evaluate("window.revealed = null")
+                if navigation == "hash":
+                    await page.evaluate("fragment => { location.hash = fragment; }", fragment)
+                else:
+                    # A host updating history can emit hashchange itself while
+                    # the browser's native :target still names the old element.
+                    await page.evaluate("""fragment => {
+                        history.pushState(null, '', fragment ? '#' + fragment : location.pathname);
+                        dispatchEvent(new HashChangeEvent('hashchange'));
+                    }""", fragment)
+                await page.wait_for_function(
+                    "changes => window.hashChanges > changes", arg=changes
+                )
+                assert await page.evaluate("window.revealed") == expected
+                await assert_selection(expected)
+
+    run_browser(scenario())
+
+
+@pytest.mark.browser
+def test_export_highlights_native_target_without_javascript(tmp_path):
+    from browser_support import browser_session, run_browser
+
+    store.save_ledger([{"id": "my claim", "text": "Space"},
+                       {"id": "my%20claim", "text": "Literal escape"}])
+    url = export.write(tmp_path / "export.html").as_uri()
+
+    async def scenario():
+        async with browser_session() as browser:
+            page = await browser.new_page(java_script_enabled=False)
+            for fragment in ("ledger-my%20claim", "ledger-my%2520claim"):
+                await page.goto(url + "#" + fragment)
+                target = page.locator('.ledger:target')
+                assert await target.count() == 1
+                assert await target.evaluate("node => getComputedStyle(node).outlineStyle") == "solid"
+
+    run_browser(scenario())

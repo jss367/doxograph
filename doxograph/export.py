@@ -46,8 +46,9 @@ h3 { font-size: 1rem; margin: 1.75rem 0 .5rem; }
 .claim .meta a { color: var(--accent); }
 .permalink { color: var(--muted); text-decoration: none; margin-left: .35rem; font-size: .82rem; }
 .permalink:hover { color: var(--accent); }
-:target { scroll-margin-top: 4.5rem; }
-.claim:target, .paper:target, .ledger:target { background: var(--panel); outline: 2px solid var(--accent);
+:target, .fragment-target { scroll-margin-top: 4.5rem; }
+:root:not(.fragment-targets) :is(.claim, .paper, .ledger):target,
+:is(.claim, .paper, .ledger).fragment-target { background: var(--panel); outline: 2px solid var(--accent);
   outline-offset: 2px; border-radius: 3px; }
 .claim .evidence { font-size: .88rem; margin: .35rem 0 0; }
 .claim blockquote { margin: .4rem 0 0; padding-left: .7rem; border-left: 2px solid var(--line);
@@ -128,11 +129,22 @@ apply();
 
 // A link from another document names one paper, claim, or ledger entry. If
 // the filters hide it, they are cleared, so the link never lands on nothing.
+let selectedTarget = null;
 function reveal() {
-  let target = null;
-  try { target = document.getElementById(decodeURIComponent(location.hash.slice(1))); } catch (_) {}
-  target = target || document.getElementById(location.hash.slice(1));
+  // Once the resolver runs, its exact-first choice owns selection as well
+  // as scrolling. Keep native :target styling only as a no-script fallback.
+  document.documentElement.classList.add('fragment-targets');
+  if (selectedTarget) selectedTarget.classList.remove('fragment-target');
+  selectedTarget = null;
+  const fragment = location.hash.slice(1);
+  if (!fragment) return;
+  let target = document.getElementById(fragment);
+  if (!target) {
+    try { target = document.getElementById(decodeURIComponent(fragment)); } catch (_) {}
+  }
   if (!target) return;
+  selectedTarget = target;
+  target.classList.add('fragment-target');
   if (target.closest('[hidden]')) {
     q.value = ''; kindSel.value = ''; tagSel.value = '';
     apply();
@@ -140,7 +152,7 @@ function reveal() {
   target.scrollIntoView();
 }
 window.addEventListener('hashchange', reveal);
-if (location.hash) reveal();
+reveal();
 """
 
 
@@ -159,9 +171,8 @@ def _permalink(kind: str, identifier: str) -> str:
             f'title="Link to this {"entry" if kind == "ledger" else kind}">#</a>')
 
 
-def _web_links(links: list[str] | None) -> list[str]:
-    # Stored links are checked when saved; a hand-edited file is not.
-    return [link for link in links or [] if link.lower().startswith(("https://", "http://"))]
+def _is_web_link(link: str) -> bool:
+    return link.lower().startswith(("https://", "http://"))
 
 
 def _authors(authors: list[str]) -> str:
@@ -295,7 +306,7 @@ def render(title: str = "Doxograph") -> str:
     ledger_by_id = {c["id"]: c for c in ledger}
     tensions = [t for t in store.tension_rows(rows) if t.get("status") != "dismissed"]
     agreements = [a for a in store.agreement_rows(rows) if a.get("status") != "dismissed"]
-    syntheses = {s["topic"]: s for s in store.synthesis_rows(rows)}
+    syntheses = {s["topic"]: s for s in store.synthesis_rows(rows, tensions)}
     rows_by_id = {r["id"]: r for r in rows}
     anchored: set[str] = set()
     generated = store.now()
@@ -392,8 +403,8 @@ def render(title: str = "Doxograph") -> str:
         source = paper.get("source") or {}
         link = source.get("url") or ""
         heading = _e(paper.get("title") or paper["key"])
-        code = _web_links(paper.get("code"))
-        if link:
+        code = [url for url in paper.get("code") or [] if _is_web_link(url)]
+        if _is_web_link(link):
             heading = f'<a href="{_e(link)}">{heading}</a>'
         body.append(
             f'<div class="paper" id="{_e(anchor("paper", paper["key"]))}">'

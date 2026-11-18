@@ -96,3 +96,12 @@ def test_export_handles_a_paper_whose_authors_are_unknown():
     assert "Legacy paper" in html and "Old wording" in html
     with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
         assert client.post("/api/export", json={}).status_code == 200
+
+
+def test_export_only_links_web_sources():
+    for key, url in (("web", "HTTPS://example.org/paper"), ("local", "file:///private/paper.pdf")):
+        store.save_paper(store.new_paper(key, title=f"{key} paper", source={"url": url}))
+    html = export.render()
+    assert '<a href="HTTPS://example.org/paper">web paper</a>' in html
+    assert "local paper" in html
+    assert "file:///private/paper.pdf" not in html
